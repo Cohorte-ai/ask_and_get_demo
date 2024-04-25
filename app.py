@@ -4,6 +4,8 @@ import openai
 import nest_asyncio
 nest_asyncio.apply()
 
+import PyPDF2
+
 from typing import Dict, Any, List
 
 from llama_index.core import SimpleDirectoryReader, get_response_synthesizer
@@ -78,6 +80,7 @@ class StreamlitChatPack(BaseLlamaPack):
         image = Image.open('logo.png')
         # Display the image in the sidebar at the top left
         st.sidebar.image(image, width=40)
+        llm = OpenAI(temperature=0, model="gpt-3.5-turbo")
 
         if "messages" not in st.session_state:  # Initialize the chat messages history
             st.session_state["messages"] = [
@@ -93,57 +96,78 @@ class StreamlitChatPack(BaseLlamaPack):
             icon="ℹ️",
         )
         # Define the pills with emojis
-        query_options = ["None", "Option 1",
-                         "Option 2"]
+        query_options = ["None", "I need information about Transformer models and how infinite context can be processed.",
+                         "I need details about scaling rectified flow for image synthesis"]
         # emojis = ["👥", "📅", "🏷️"]
         selected_query = pills(
             "Select example queries or enter your own query in the chat input below", query_options, key="query_pills", clearable=True)
 
         def add_to_message_history(role, content):
-            message = {"role": role, "content": str(content)}
+            print(content)
+            message = {"role": role, "content": "\n\n"+str(content)}
             st.session_state["messages"].append(message)  # Add response to message history
+        
 
-        def fetch_and_load_wiki_documents(city_names: List[str]):
-            # Ensure the data directory exists
-            data_path = Path("data")
+        # class CustomDirectoryReader(SimpleDirectoryReader):
+        #     def __init__(self, return_full_document=False, **kwargs):
+        #         super().__init__(**kwargs)
+        #         self.return_full_document = return_full_document
+        #         # Assuming PDFReader supports a return_full_document parameter
+        #         self.file_extractor[".pdf"] = PDFReader(return_full_document=self.return_full_document)
+
+        # def load_documents(path_to_directory):
+        #     reader = CustomDirectoryReader(input_dir=path_to_directory, return_full_document=True)
+        #     documents = reader.load_data()
+        #     return documents
+
+        def process_pdf_documents():
+            # Ensure the output directory exists
+            data_path = Path("txt")
             data_path.mkdir(exist_ok=True)
-
-            # Fetch and save Wikipedia extracts for each city
-            for city_name in city_names:
-                response = requests.get(
-                    "https://en.wikipedia.org/w/api.php",
-                    params={
-                        "action": "query",
-                        "format": "json",
-                        "titles": city_name,
-                        "prop": "extracts",
-                        "explaintext": True,
-                    },
-                ).json()
-                page = next(iter(response["query"]["pages"].values()))
-                wiki_text = page["extract"]
-
-                with open(data_path / f"{city_name}.txt", "w") as fp:
-                    fp.write(wiki_text)
-
-            # Load all wiki documents
-            city_docs = []
-            for city_name in city_names:
-                docs = SimpleDirectoryReader(
-                    input_files=[f"data/{city_name}.txt"]
-                ).load_data()
-                docs[0].doc_id = city_name
-                city_docs.extend(docs)
             
-            return city_docs
+            # Directory containing the PDFs
+            pdf_directory = Path("pdfs")
+            
+            # Process each PDF in the directory
+            for pdf_file in pdf_directory.glob("*.pdf"):
+                # Open the PDF file
+                with open(pdf_file, "rb") as file:
+                    reader = PyPDF2.PdfReader(file)
+                    text = []
+                    
+                    # Read each page in the PDF
+                    for page in reader.pages:
+                        text.append(page.extract_text())
+                    
+                    # Join all text from all pages
+                    full_text = "\n".join(filter(None, text))
+                
+                # Save the extracted text to a .txt file with the same name
+                output_file_path = data_path / f"{pdf_file.stem}.txt"
+                with open(output_file_path, "w", encoding="utf-8") as output_file:
+                    output_file.write(full_text)
+            
+            # Load all text documents as arxiv_docs
+            arxiv_docs = []
+            for text_file in data_path.glob("*.txt"):
+                docs = SimpleDirectoryReader(
+                    input_files=[str(text_file)]
+                ).load_data()
+                docs[0].doc_id = text_file.stem  # Using the stem of the file name as the document ID
+                arxiv_docs.extend(docs)
+            
+            return arxiv_docs
 
         # To be executed only once
         # wiki_titles = ["Mumbai", "Chennai", "Toronto", "Seattle", "Chicago", "Boston", "Houston"]
         # city_documents = fetch_and_load_wiki_documents(wiki_titles)
 
-        def build_document_summary_index(city_docs):
+        # To be executed only once
+        # arxiv_documents = process_pdf_documents()
+        # st.write(arxiv_documents)
+
+        def build_document_summary_index(docs):
             # Initialize the LLM (gpt-3.5-turbo) with OpenAI
-            llm = OpenAI(temperature=0, model="gpt-3.5-turbo")
             
             # Initialize the SentenceSplitter for splitting long sentences
             splitter = SentenceSplitter(chunk_size=1024)
@@ -155,7 +179,7 @@ class StreamlitChatPack(BaseLlamaPack):
             
             # Build the document summary index
             doc_summary_index = DocumentSummaryIndex.from_documents(
-                city_docs,
+                docs,
                 llm=llm,
                 transformations=[splitter],
                 response_synthesizer=response_synthesizer,
@@ -165,8 +189,8 @@ class StreamlitChatPack(BaseLlamaPack):
             return doc_summary_index
 
         #To be executed only once.
-        # document_index = build_document_summary_index(city_documents)
-        # document_index.storage_context.persist("index")
+        # document_index = build_document_summary_index(arxiv_documents)
+        # document_index.storage_context.persist("arxivindexfull")
 
 
         def load_index(index_name):           
@@ -178,29 +202,43 @@ class StreamlitChatPack(BaseLlamaPack):
             
             return doc_summary_index
 
-        doc_summary_index = load_index("index")
+        doc_summary_index = load_index("arxivindexfull")
 
-        # retriever = DocumentSummaryIndexLLMRetriever(
-        #     doc_summary_index,
-        #     # choice_select_prompt=None,
-        #     # choice_batch_size=10,
-        #     # choice_top_k=1,
-        #     # format_node_batch_fn=None,
-        #     # parse_choice_select_answer_fn=None,
-        # )
-
-        
-        retriever = DocumentSummaryIndexEmbeddingRetriever(
+        retriever = DocumentSummaryIndexLLMRetriever(
             doc_summary_index,
-            # similarity_top_k=1,
+            # choice_select_prompt=None,
+            choice_batch_size=10,
+            choice_top_k=3,
+            # format_node_batch_fn=None,
+            # parse_choice_select_answer_fn=None,
         )
 
-       # Sidebar for database schema viewer
-        st.sidebar.markdown("## File Repository Viewer")
+        
+        # retriever = DocumentSummaryIndexEmbeddingRetriever(
+        #     doc_summary_index,
+        #     similarity_top_k=3,
+        # )
 
-        """
-        Load file repo here
-        """
+       # Sidebar header
+        st.sidebar.markdown("## File Repository Viewer")
+        pdf_folder_path = "pdfs"
+
+        # Check if the directory exists
+        if os.path.exists(pdf_folder_path):
+            # List all files in the 'pdfs' folder
+            files = os.listdir(pdf_folder_path)
+            
+            # Create a DataFrame from the list of files
+            df_files = pd.DataFrame(files, columns=['File Names'])
+
+            # Set DataFrame index starting from 1 instead of 0
+            df_files.index = range(1, len(df_files) + 1)
+            
+            # Display the DataFrame in the sidebar
+            st.sidebar.dataframe(df_files.style.set_properties(**{'text-align': 'left', 'white-space': 'normal'}))
+        else:
+            st.sidebar.write("The 'pdfs' folder does not exist.")
+
 
         st.sidebar.markdown('## Disclaimer')
         st.sidebar.markdown(
@@ -215,7 +253,11 @@ class StreamlitChatPack(BaseLlamaPack):
 
         for message in st.session_state["messages"]:  # Display the prior chat messages
             with st.chat_message(message["role"]):
-                st.write(message["content"])
+                st.markdown(f"""
+                <div style="background-color: #f1f1f1; padding: 10px; border-radius: 10px; border: 1px solid #e1e1e1;">
+                    {message["content"]}
+                </div>
+                """, unsafe_allow_html=True)
 
         # To avoid duplicated display of answered pill questions each rerun
         if selected_query and selected_query != "None" and selected_query not in st.session_state.get(
@@ -226,16 +268,57 @@ class StreamlitChatPack(BaseLlamaPack):
                 with st.chat_message("user"):
                     st.write(selected_query)
                 with st.chat_message("assistant"):
-                    response = st.session_state["query_engine"].query(
-                        "User Question:"+selected_query+". ")
-                    sql_query = f"```sql\n{response.metadata['sql_query']}\n```\n**Response:**\n{response.response}\n"
-                    response_container = st.empty()
-                    response_container.write(sql_query)
+                    retrieved_nodes = retriever.retrieve(selected_query)
+                    doc_summary_by_name = {}
+                    # Loop through each node in the retrieved_nodes
+                    for node in retrieved_nodes:
+                        # Get the document name from node metadata
+                        doc_name = node.metadata['file_name']
+                        
+                        # Get the document summary
+                        doc_summary = f""" {doc_summary_index.get_document_summary(node.node.ref_doc_id)}
+                        
+                        """
+                        # Check if the document name already exists in the dictionary
+                        if doc_name in doc_summary_by_name:
+                            # Concatenate the new summary to the existing summary for this document name
+                            print("Summary already present")
+                        else:
+                            # Otherwise, add the document name and summary to the dictionary
+                            doc_summary_by_name[doc_name] = doc_summary                    
+                    # Initialize an empty list to store each final response
+                    responses = []
+
+                    for doc_name, summaries in doc_summary_by_name.items():
+                        text = f"""
+**Document Name**: {os.path.splitext(doc_name)[0]}  
+**Document Summary**: {summaries}"""
+
+                        llmresponse = llm.complete(f"""
+                            User asked a query, for which our AI application has suggested a document which contains relevant information for the user query. The document's name and summary is provided below in card markdown:
+                            
+                            card markdown: {text}
+
+                            Based on the above information, provide a justification as to why the above document is relevant to the user query. Return just the justification text and nothing else.
+
+                            """)
+                        # Assume llmresponse.text gives the justification text directly
+
+                        finalresponse = f"{text.rstrip()}  \n\n**Justification**: {llmresponse.text}"
+                        responses.append(finalresponse)
+                        st.markdown(f"""
+                        <div style="background-color: #f1f1f1; padding: 10px; border-radius: 10px; border: 1px solid #e1e1e1;">
+                            {finalresponse}
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    # Combine all responses into one formatted string
+                    combinedfinalresponse = "\n\n---\n\n".join(responses)
                     add_to_message_history("user", selected_query)
-                    add_to_message_history("assistant", sql_query)
+                    add_to_message_history("assistant", combinedfinalresponse)
 
         # Prompt for user input and save to chat history
-        prompt = st.chat_input("Enter your natural language query about the database") 
+        prompt = st.chat_input("Enter your natural language query about the Arxiv paper collection") 
         if prompt:
             with st.spinner():
                 add_to_message_history("user", prompt)
@@ -250,20 +333,68 @@ class StreamlitChatPack(BaseLlamaPack):
 
                     # sql_query = f"```sql\n{response.metadata['sql_query']}\n```\n**Response:**\n{response.response}\n"
                     # Initialize a string with the Markdown table headers
-                    response_text = "| Node Score | Node Metadata |\n|------------|---------------|\n"
+                    # response_text = "| Document Name | Document Summary |\n|------------|---------------|\n"
 
                     # Loop over each node in retrieved_nodes to append each node's score and metadata to the table
-                    for node in retrieved_nodes:
-                        print(node)
-                        # Append each node's score and metadata to the Markdown table
-                        response_text += f"| {node.metadata['file_name']} | {node.metadata} |\n"
+                    # Assume we have the retrieved_nodes list populated as required
 
-                    # The response_text now contains the Markdown table with all nodes' scores and metadata
-                    print(response_text)
+                    # Initialize a dictionary to hold the document names and concatenated summaries
+                    doc_summary_by_name = {}
+
+                    # Loop through each node in the retrieved_nodes
+                    for node in retrieved_nodes:
+                        # st.write(node)
+                        # Get the document name from node metadata
+                        doc_name = node.metadata['file_name']
+                        
+                        # Get the document summary
+                        doc_summary = f""" {doc_summary_index.get_document_summary(node.node.ref_doc_id)}
+                        
+                        """
+                        
+                        # Check if the document name already exists in the dictionary
+                        if doc_name in doc_summary_by_name:
+                            # Concatenate the new summary to the existing summary for this document name
+                            print("Summary already present")
+                        else:
+                            # Otherwise, add the document name and summary to the dictionary
+                            doc_summary_by_name[doc_name] = doc_summary
                     
-                    response_container = st.empty()
-                    response_container.write(response_text)
-                    add_to_message_history("assistant", response_text)
+
+                    # Optional: If you want to output this information
+                    # Initialize an empty list to store each final response
+                    responses = []
+
+                    for doc_name, summaries in doc_summary_by_name.items():
+                        text = f"""
+**Document Name**: {os.path.splitext(doc_name)[0]}  
+**Document Summary**: {summaries}"""
+
+                        llmresponse = llm.complete(f"""
+                            User asked a query, for which our AI application has suggested a document which contains relevant information for the user query. The document's name and summary is provided below in card markdown:
+                            
+                            card markdown: {text}
+
+                            Based on the above information, provide a justification as to why the above document is relevant to the user query. Return just the justification text and nothing else.
+
+                            """)
+                        # Assume llmresponse.text gives the justification text directly
+
+                        finalresponse = f"{text.rstrip()}  \n\n**Justification**: {llmresponse.text}"
+                        responses.append(finalresponse)
+                        st.markdown(f"""
+                        <div style="background-color: #f1f1f1; padding: 10px; border-radius: 10px; border: 1px solid #e1e1e1;">
+                            {finalresponse}
+                        </div>
+                        """, unsafe_allow_html=True)
+                        # st.info("---")
+
+                    # Combine all responses into one formatted string
+                    combinedfinalresponse = "\n\n---\n\n".join(responses)
+
+                    # Add to message history or perform other actions with the combined response
+                    add_to_message_history("assistant", combinedfinalresponse)
+
 
 
 if __name__ == "__main__":
