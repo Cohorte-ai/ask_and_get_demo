@@ -1,0 +1,664 @@
+AlphaMath Almost Zero: process Supervision without process
+Guoxin Chen∗, Minpeng Liao∗, Chengxi Li∗, Kai Fan∗†
+Alibaba Group
+{chenguoxin.cgx,minpeng.lmp,xiji.lcx,k.fan}@alibaba-inc.com
+Abstract
+Recent advancements in large language models (LLMs) have substantially en-
+hanced their mathematical reasoning abilities. However, these models still struggle
+with complex problems that require multiple reasoning steps, frequently leading to
+logical or numerical errors. While numerical mistakes can largely be addressed
+by integrating a code interpreter, identifying logical errors within intermediate
+steps is more challenging. Moreover, manually annotating these steps for train-
+ing is not only expensive but also demands specialized expertise. In this study,
+we introduce an innovative approach that eliminates the need for manual annota-
+tion by leveraging the Monte Carlo Tree Search (MCTS) framework to generate
+both the process supervision and evaluation signals automatically. Essentially,
+when a LLM is well-pretrained, only the mathematical questions and their final
+answers are required to generate our training data, without requiring the solu-
+tions. We proceed to train a step-level value model designed to improve the
+LLM’s inference process in mathematical domains. Our experiments indicate
+that using automatically generated solutions by LLMs enhanced with MCTS
+significantly improves the model’s proficiency in dealing with intricate mathe-
+matical reasoning tasks. The code for our method will be made available at
+https://github.com/MARIO-Math-Reasoning/Super_MARIO .
+1 Introduction
+Method Question Analysis Final Answer
+CoT ✓ Text✓ ✓
+PoT ✓ Code✓ ✓
+REACT ✓ Text + Code ✓ ✓
+Ours ✓ % ✓
+Table 1: Data format for training math LLMs
+To enhance the reasoning capabilities of large language models (LLMs) in complex tasks, the Chain-
+of-Thought (CoT) [ 20] approach was introduced, capitalizing on the in-context learning proficiency
+of LLMs. However, in the realm of mathematical reasoning, LLMs often face significant limitations
+due to the “hallucination" issue in numerical calculations, impeding their full potential. To address
+this, the Program-of-Thought (PoT) framework [ 2] and Program-Aided Language (PAL) models [ 5]
+have been developed, incorporating an external code interpreter to handle precise numerical and
+symbolic computations. This integration is intended to mitigate the challenges associated with LLMs’
+intrinsic calculation errors and enhance their accuracy and reliability in complex reasoning tasks.
+These approaches, which often rely on self-consistency majority voting, do not reflect the natural
+process of mathematical problem-solving as human beings. This discrepancy arises because both
+the CoT and PoT frameworks pursue a solution to its final answer regardless of the accuracy of
+intermediate steps. Unlike these approaches, humans tend to reassess and potentially alter their
+solution path upon encountering a mistake or dead-end in the problem-solving process. This dynamic
+∗equal contribution
+†Corresponding Author.arXiv:2405.03553v1  [cs.CL]  6 May 2024
+Figure 1: Our approach involves iterating through three distinct stages. First, we collect a mathemati-
+cal dataset that comprises pairs of questions and their corresponding final answers. Next, we employ
+MCTS on the policy and value models, denoted as πθkandVϕkrespectively, to generate both correct
+and incorrect solution paths along with the estimated value of nodes along those paths. Finally, we
+optimize and update the policy and value models using the data obtained from the second stage.
+method of tackling problems has been examined in the context of the Tree of Thoughts (ToT)
+framework [23], which is pertinent for tasks demanding non-trivial planning or search.
+Our work extends the research line of Tree of Thoughts, taking it beyond a purely LLM inference
+framework. We utilize the LLMs integrated with Monte Carlo Tree Search (MCTS) framework to
+strike a more effective balance between exploration and exploitation, enabling the generation of high-
+quality training data without professional human annotations. This approach has been thoroughly
+investigated in the context of board games, such as AlphaGo [ 16]. Notably, AlphaGo Zero [ 17],
+armed with the MCTS, showcases how a neural network model can progressively evolve without
+human knowledge, autonomously producing the Go game training strategies.
+As the strategy ( i.e., solution) of mathematical problems, whether through textual analysis or coding
+snippets, demands rigorous logical structuring. Consequently, training data for approaches like
+CoT or PoT typically undergo manual annotation by domain experts, e.g., MATH dataset [ 7]. We
+hypothesize that well pre-trained LLMs possess the necessary mathematical knowledge to generate
+correct reasoning; however, they require appropriate stimulation—such as an improved prompt or
+search strategy—to do so. In our research, solutions in the REACT format [ 22] including both textual
+analyses and code snippets [ 19,8] are autonomously generated by a well pre-trained LLM equipped
+with appropriate prompts and deliberate designed MCTS framework.
+Our data generator and filtering operate under two primary assumption: first, that the correctness of
+the LLM predicted answer is positively correlated with the quality of the entire solution process, and
+second, that errors flagged by the code interpreter signal the low-quality or possibly false positive
+solutions. This is a fundamental reason our training data necessarily consists only of question
+statements and their final answers. Unlike in the Go game, where the final board configuration
+directly indicates a win or loss, our methodology requires validating the equivalence between the
+model’s predicted answer and the actual final answer. The two underlying assumptions also offer
+insight into the rationale behind the construction and training of the value model within the MCTS
+framework, where the value model is crafted to assess the quality of intermediate reasoning steps.
+Empirically, we build an iterative training approach as shown in Figure 1, and justify our methodology
+on the MATH dataset, which is an open-sourced dataset notorious for its challenging math problem-
+solving nature. The inference results demonstrates two key points: first, that the integration of
+LMs with the value model and the MCTS framework can progressively generate high-quality math
+reasoning data autonomously; second, that the value model is instrumental in aiding the policy model
+to navigate more effective solution paths.
+2 Preliminary
+We assume that for any given input question q, the solution process can be broken down into multiple
+reasoning steps.3Under this perspective, we conceptualize mathematical problem solving within the
+context of reinforcement learning.
+3We can facilitate this assumption by, e.g., segmenting the solution based on distinct stages or simply period.
+2
+Concretely, consider that the complete solution comprises Treasoning steps, at a given time t, we
+represent the partial solution as the state st, and the subsequent reasoning step that might be taken
+as the action at. In this scenario, the policy model is embodied by a large language model, and the
+transition f(st+1|at,st)from one state to the next is accomplished through a simple operation of
+concatenation.
+πθ(at|st) =LLM (at|st) (1)
+st+1=Cat(st,at) (2)
+Our primary goal is to develop a step-level value model, denoted as Vϕ(s), which is capable of
+assessing the confidence in the correctness of partial solution and guide the LLM in generating
+subsequent reasoning steps.
+To train the value model, we must first establish a definition for the reward. In the context of
+mathematical problem solving, we assign the reward r= 0to all non-terminal reasoning steps, and
+r=±1to a correct/incorrect final answer.
+A common method to create the learning signal is to employ Monte Carlo (MC) evaluation.
+˜V(st) =1
+NNX
+i=1r
+a(i)
+t′≥t,s(i)
+t′>t|st
+, (3)
+where a(i)
+t′≥tands(i)
+t′>t, which are sampled in accordance with the policy model and the state transition
+function, represent the i-th simulation. Thus, r(·|st)means the reward of the final outcome in one
+simulation. Then, for any given partial solution s, we can train the step-level value model Vϕusing a
+supervised regression loss defined as follows:
+LVϕ(s) =Vϕ(s)−˜V(s)2
+. (4)
+3 Our Method
+In above approach of MC evaluation, it requires multiple simulations from each state, which can
+be practically inefficient. We propose employing the Monte Carlo Tree Search (MCTS) algorithm,
+which has the potential to reuse simulations and update the estimated values in a principled manner.
+3.1 MCTS Evaluation
+Imagine we have a value model Vϕkand an LLM policy model πθk. Using these models, we can
+construct an inference algorithm powered by Monte Carlo Tree Search (MCTS). This algorithm
+starts with the initial state as its root and, through the synergistic use of policy and value networks,
+systematically grows the search tree by adding new nodes. These nodes correspond to states deemed
+to have high potential based on the outcomes of simulated trajectories. Specifically within the
+context of mathematical problem-solving, we present the MCTS algorithm, focusing on its four key
+operations, as shown in the left four panels of Fig. 2.
+Selection During the i-th iteration of the MCTS, the process begins with s0, representing the initial
+state or input question. The algorithm then proceeds to explore the tree Tkby selecting actions
+according to the Upper Confidence bounds applied to Trees (UCT) principle or similar variations.
+This selection process is mathematically represented as:
+at= arg max
+a∈Tkh
+ˆQ(st,a) +Puct(πθk(a|st), N(s,a))i
+(5)
+where the state-action value ˆQ(s,a)and its visiting count N(s,a)are stored and will be updated
+within the tree as the search progresses. This iterative selection process continues until the algorithm
+encounters a leaf node.
+Expansion Considering the partial solution as a leaf node from the selection, this node can be
+expanded. In other words, the probability of the next reasoning step (action) should be calculated.
+Given that the LLM can generate an unlimited number of potential actions (token sequence), we
+practically constrain the action space by employing random sampling with higher temperature, which
+is used to ensure the diversity.
+3
+Figure 2: MCTS for step-level value evaluation.
+Evaluation Evaluation of the leaf node or partial solution st, identified during the selection phase, is
+conducted using a weighted sum as introduced in [16, 17].
+ˆV(st)(i)= (1−λ)·Vϕk(st) +λ·r
+a(i)
+t′≥t,s(i)
+t′>t|st
+(6)
+Note that the intermediate value estimation ˆVin MCTS differs from the training signal ˜Vdefined in
+Eq. (3). The term r(·)denotes the reward obtained in the i-th simulation, by rolling out from state st.
+The hyperparameter λserves to balance the contribution of the value network’s estimation with the
+empirical reward obtained during the rollout. In AlphaGo Zero [ 17], a computationally efficient
+version without rollout was adopted, specifically with λ= 0. Given that our tree depth is much
+shallower than Go games ( e.g., a maximum depth of 8), expansions can easily reach a terminal node.
+Consequently, we also discard the rollout by setting λ=Iterminal (st).
+Backup At the end of the i-th simulation, the nodes along the path from the root to the leaf node st
+undergo a backward pass update. The updates to their action-state values and visitation counts are
+executed according to the following rules:
+N(s,a)←N(s,a) + 1, ˆQ(s,a)←1
+N(s,a)iX
+j=1ˆV(st)(j)(7)
+Self-Eval After running Nsimulations with the MCTS algorithm, we obtain the final tree Tk,
+which stores the expanded nodes and their corresponding action-state values. Recognizing that
+V(s) =Ea[Q(s,a)], we can approximate the value using the tree resulting from the MCTS algorithm,
+as shown below:
+˜V(st) =X
+at|st→atN(st,at)1/τ
+P
+atN(st,at)1/τˆQ(st,at) (8)
+where τis a temperature parameter. Considering that the transition function is deterministic, and
+assuming that Q(st,at) =r(st,at) +V(st+1) =V(st+1)for non-terminal nodes4, we can employ
+theQvalues as training signals. This implies that we can directly fit the state-action value model as
+follows.
+˜V(st+1) =ˆQ(st,at) (9)
+3.2 Iterative Training
+Initialization Initially, our approach begins with a pre-training LLM as the policy model πθ1. We
+extend this model by adding an auxiliary linear layer with a tanh activation function, which works
+alongside the traditional softmax layer responsible for token prediction, as depicted in the rightmost
+4For terminal steps, the label is straightforwardly determined by the correctness of the final answer.
+4
+Algorithm 1 Step-level Beam Search
+Require: Beam sizes B1,B2, question q, policy model πθ, value model Vϕ, maximum steps T.
+Ensure: candidate paths C
+1:C= [q]∗B1,t= 1 ▷Initialization
+2:while t < T andnon-terminal path in Cdo
+3: Priority Queue Ct+1 ▷Max Heap
+4: forstinCdo
+5: Sample
+a(b)	B2
+b=1∼πθ(a|st) ▷LLM can do B2samples in parallel.
+6: forb= 1toB2do
+7: st+1=Cat
+st,a(b)
+8: Add(st+1, Vϕ(st+1))toCt+1 ▷ Vϕ(st+1)as the key
+9: C ← Top-B1ofCt+1
+panel of Figure 1. This design implies that the two models, πθandVϕ, share the majority of their
+parameters. The parameters of the linear layer associated with Vϕ1are randomly initialized, leading
+to an initial tendency of the LLM’s value head to predict a value close to 0 at the first ( k= 1st) round
+of MCTS. However, as the simulations in the first round MCTS proceed, the rewards ( ±1) from
+terminal nodes are back-propagated to their parent nodes. This back-propagation process gradually
+causes the estimated Qvalue ( ˆQ) to converge towards a value within the range of [−1,1].
+Training Method From the tree Tkcontructed from the k-th round of MCTS, we can sample two
+solution paths corresponding to terminal nodes with correct and incorrect final answers, denoted as
+x+andx−, respectively. The value estimations for each node along these paths, as defined in Eq (9),
+have been stored within the tree. We then apply a multi-task loss function to update both the policy
+and value models.
+L(θ, ϕ) =−logπθ(x+|q) +T(x+)X
+t=1∥Vϕ(st)−˜V(st)∥2+T(x−)X
+t=1∥Vϕ(st)−˜V(st)∥2(10)
+where the first term represents the negative log-likelihood loss for next-token prediction in correct
+solutions, and the second and third terms capture the loss in value prediction for both correct and
+incorrect solutions, respectively. T(x)denotes the number of steps for solution path x.
+With the updated policy and value models πθk+1andVϕk+1, we can advance to the next-round MCTS,
+iterating this training process to enhance our models further.
+3.3 Inference
+MCTS For MCTS inference, it is necessary to set λ= 0 in the evaluation as shown in Figure 2.
+Unlike in board games, during inference, we cannot verify the correctness of a path; therefore,
+we consistently rely on the value model for node evaluation, including for terminal nodes. MCTS
+demands multiple simulations to update visit counts, aiming to estimate a robust policy distribution.
+This requirement becomes computationally intensive and time-consuming, rendering it impractical
+for deployment in a production environment. Consequently, we simplify the MCTS inference process
+to a more straightforward top-down version that eliminates the need for a backup, referred to as
+Step-level Beam Search.
+Step-level Beam Search Given two beam sizes B1andB2, initially we can employ the LLM to
+generate B1·B2actions for the first step by sampling decoding. These generated actions are then
+evaluated using the step-level value LLM, from which the top- B1ones are selected. Subsequently, for
+each of these chosen actions, the LLM generates B2subsequent actions, yielding a total of B1·B2
+actions for the next step. The value-based LLM reranks them, and the best B1actions are picked.
+This reranking and selection procedure is repeated iteratively.
+Crucially, with the special case of B1= 1, the step-level beam search enables the sequential streaming
+output of each step, making it more practical for real-world production scenarios. The pseudo-code is
+presented in Algorithm 1.
+5
+4 Experiments
+We investigate whether our approach can enhance the mathematical reasoning capabilities of large
+language models without human annotated solution process.
+4.1 Experimental Setup
+In this study, we mainly investigate the math domain-specific language model, DeepSeekMath-Base-
+7B [15], pre-trained on a substantial math-related corpus but without any supervised fine-tuning. It
+is believed to possess necessary mathematical knowledge to tackle a wide range of mathematical
+problems. For the training sets, we exclusively extract question and answer pairs from GSM8K [ 3]
+and MATH [ 7], omitting the human-annotated solution analysis. In total, our training set includes
+only 15k question answer pairs and 0 solution process. In contrast, for the test sets, we evaluate our
+approach not only on GSM8K and MATH but also on the out-of-distribution dataset GaoKao2023 [ 8].
+To assess the accuracy of the predicted answers, we utilize the math evaluation toolkit [26].
+4.2 Solution Generation via MCTS
+In our setup, the training data lacks human-annotated solutions. Instead, we utilize the MCTS
+framework to generate detailed solution processes with the possibility of using Python code interpreter.
+Initially, for the first round of MCTS, the prompt used for our solution generation adheres to the
+REACT [ 22] format, incorporating 2 demonstrations randomly selected from a pool of 20 prepared
+examples. Starting from the second round, having already fine-tuned our model, we employ a
+straightforward prompt in our SFT XML format, without any demonstration. Two prompt examples
+are shown in Appendix 8.
+Specifically, we iteratively generate data and train our policy and value models through K= 3rounds,
+continuing until the enhancement observed between any two consecutive rounds is incremental. In
+every round, we build 10 trees for each question-answer pair and randomly sample both at most
+4 correct and 4 incorrect solution process. The ratio between positive and negative examples is
+approximately 1:1, with the count of positive examples in each round varying between 58k and 59k.
+4.3 Baselines
+Proprietary and Open-Source Models We first compare our approach with strong proprietary and
+open-source models, including OpenAI’s ChatGPT and GPT-4 [ 13], Llama2 [ 18], Llemma [ 1]. By
+default, we report the results obtained using Chain of Thought (CoT) prompting [ 20], along with the
+prompting results of PAL [5], due to its enhanced performance in mathematical reasoning.
+Supervised Fine-Tuning Models SFT models leverage high-quality seed data with process supervi-
+sion annotated from GPT-4 or human to enhance the their capabilities in complex reasoning scenarios.
+To ensure a fair comparison, we primarily contrast our approach with the highest-performing SFT
+models that utilize an external tool - a Python code interpreter. These include MAmmoTH [ 25],
+MathCoder [19], ToRA [6], MARIO [26], MathGenie [11], and DeepSeek-Math-Instruct [15].
+4.4 Main Results
+We report our in-domain and out-of-domain (OOD) results in Table 2. Different from previous
+works [ 25,19,6,26,11], our proposed AlphaMath does not rely on high-quality solutions annotated
+by humans or GPT-4, whether in the form of text analysis or code snippets. Such solutions typically
+bolster the model’s reasoning abilities but also entail substantial costs associated with annotation.
+Furthermore, our method differs from prior research by not incorporating any external datasets ( e.g.,
+new questions and solutions) beyond the GSM8K and MATH datasets.
+The last four rows of Table 2 present our principal findings. First, we establish a baseline with
+the inherent mathematical reasoning ability of DeepSeekMath-Base using our designed prompt
+in a 2-shot setting. It’s important to note that this outcome differs from the results reported for
+DeepSeekMath-Base(PAL) in the original study, as it utilized prompts with 8-shot and 4-shot for the
+GSM8K and MATH datasets, respectively.
+6
+Table 2: Main results. The best results of 7B models are bold. For the methods with released model
+outputs, performance metrics using the evaluation toolkit [ 26] are also provided in brackets.‡Seed
+data refers to high-quality annotated (question, solution) pairs, typically annotated by humans or
+GPT-4.♯Unless otherwise specified, we set B2= 5by default.
+Model SizeSeed Data‡
+AnnotationSeed Data
+SizeToolZero
+ShotIn-Domain OOD
+GSM8K MATH GaoKao2023
+Proprietary Models
+GPT-4 - - - % % 92.0 42.5 -
+GPT-4 (PAL) - - - ✓% 94.2 51.8 -
+ChatGPT - - - % % 80.8 35.5 -
+ChatGPT (PAL) - - - ✓% 78.6 38.7 -
+Open-Source Models
+Llama-2 7B - - % % 13.3 4.1 -
+CodeLlama 7B - - % % 10.5 4.5 -
+CodeLlama(PAL) 7B - - ✓% 27.1 17.2 -
+Llemma 7B - - % % 36.4 18.0 -
+Llemma(PAL) 7B - - ✓% 40.1 21.5 -
+DeepSeekMath-Base(PAL) 7B - - ✓% 66.9 31.4(33.2) -
+SFT Models
+MAmmoTH-Coder 34B GPT-4+Human 260k ✓ ✓ 72.7 43.6 25.2
+MathCoder 34B GPT-4 49k ✓ ✓ 81.7 46.1(45.8) -
+ToRA-Code 34B GPT-4 16k ✓ ✓ 80.7 50.8(51.2) 31.7
+MARIO 34B GPT-4+Human 27k ✓ ✓ 78.2 53.5 42.6
+MathGenie 34B GPT-4 80k ✓ ✓ 84.1 55.1 -
+Llama-2 SFT 7B Human 15k % ✓ 41.3 7.2 -
+Llama-2 RFT 7B Human 15k % ✓ 51.2 - -
+MAmmoTH-Coder 7B GPT-4+Human 260k ✓ ✓ 59.4 33.4 15.3
+MathCoder 7B GPT-4 49k ✓ ✓ 67.8 30.7(30.6) -
+ToRA 7B GPT-4 16k ✓ ✓ 68.8 40.1 19.5
+ToRA-Code 7B GPT-4 16k ✓ ✓ 72.6 44.6 23.9
+MARIO 7B GPT-4+Human 27k ✓ ✓ 74.5 48.3 34.5
+MathGenie 7B GPT-4 80k ✓ ✓ 76.0 48.3 -
+DeepSeekMath-Instruct 7B GPT-4+Human 776k ✓ ✓ 83.7 57.4(57.2) -
+DeepSeekMath-Base 7B
++our prompt 2-shot - - ✓% 59.7 33.2 21.9
++AlphaMath ( K= 3) % 0 ✓ ✓ 73.8 53.5 41.3
++ step beam search♯B1= 1 % 0 ✓ ✓ 82.3 59.8 45.5
++ step beam search B1= 3 % 0 ✓ ✓ 84.5 63.5 46.2
++ MCTS % 0 ✓ ✓ 81.4 63.7 48.4
+Secondly, we execute 3 rounds of MCTS and proceed to train both the policy and value models, with
+only the policy model being employed for inference during greedy decoding. In comparison to our
+initial study, we record an enhancement of over 20 points for challenging problems in the MATH and
+Gaokao2023 datasets, and an improvement of more than 10 points for grade school math problems.
+Thirdly, we delve into the role of the value model in facilitating solution generation, utilizing a
+computationally efficient step-level beam search with a default B2= 5. At each intermediate step, we
+retain the top- B1candidates to formulate the subsequent step. As we increment B1, a corresponding
+gradual improvement in performance is observed. Particularly, the setting of B1= 1, B2= 5holds
+practical significance, as it offers a step-level streaming output compared with majority voting @5,
+while also being more computationally efficient.
+Ultimately, we evaluate our approach with the MCTS framework. In contrast to the construction of
+training data, here we construct a single tree with 30 simulations and a maximum of 5 child nodes.
+While MCTS demonstrates improved performance on more challenging datasets, attributed to its
+expansive search space, its substantial computational demands curtail its practical applicability in
+real-world scenarios.
+In summary, our approach demonstrates that, even in the absence of high-quality GPT-4 or human-
+annotated solution processes, it remains competitive with or surpasses the performance of the
+state-of-the-art (SOTA) on 7B LLMs.
+7
+Level 1 Level 2 Level 3 Level 4 Level 560708090100Solve Rate (%)round 1 round 2 round 3(a) Difficulty Level
+Algebra Counting
+& ProbabilityGeometry Intermediate
+AlgebraNumber
+TheoryPrealgebra Precalculus60708090100Solve Rate (%)round 1 round 2 round 3 (b) Subject Type
+Figure 3: Problem Solving Rate on MATH Training Set
+Level 1 Level 2 Level 3 Level 4 Level 5102030405060708090Solve Rate (%)round 0 round 1 round 2 round 3
+(a) Difficulty Level
+Algebra Counting
+& ProbabilityGeometry Intermediate
+AlgebraNumber
+TheoryPrealgebra Precalculus1020304050607080Solve Rate (%)round 0 round 1 round 2 round 3 (b) Subject Type
+Figure 4: Problem Solving Rate on MATH Test Set
+4.5 Analysis 1: Problem Solving Rate of MCTS
+In this experiment, we evaluate the successfully solving rate of MCTS across various rounds. Utilizing
+the MATH dataset, which categorizes each problem by difficulty level and subject type, we compute
+the problem-solving rate across different categories.
+For our training set, we count the instances wherein problems are successfully solved along any of
+the paths within the 10 constructed trees. As illustrated in Figure 3a, it becomes evident that MCTS
+achieves greater success in solving more challenging problems in subsequent rounds. Similarly,
+Figure 3b indicates that, in later rounds, MCTS consistently demonstrates an improved capability to
+solve a broader array of problems across different subjects.
+For the test set shown in Figure 4, we add the result of round 0, which corresponds to the performance
+of ‘our prompt 2-shot‘ in Table 2. We can found the improvement of round 3 is not consistency for
+different levels and subjects. For easy problems, the performance of round 3 even drops. This is the
+reason why we terminate our iterative training after round 3.
+For the test set depicted in Figure 4, we include the results from round 0, which correspond to the
+performance of our prompt 2-shot in Table 2. Unlike training set, we observe that the improvement
+observed in round 3 is not consistent across different levels and subjects, even though the overall
+accuracy is slightly increased, which will be discussed in next section. In fact, for easier problems,
+the performance in round 3 actually declines. This is the reason we terminate our iterative training
+process after round 3.
+4.6 Analysis 2: Inference Strategy
+In this section, we explore the performance of our model under various inference strategies including
+greedy decoding, step-level beam search, and MCTS. As illustrated in Figure 5, our findings show a
+8
+Greedy Step-beam
+(B1=1)Step-beam
+(B1=2)Step-beam
+(B1=3)MCTS404550556065Accuracy(%)round 1 round 2 round 3(a) MATH (In-Domain)
+Greedy Step-beam
+(B1=1)Step-beam
+(B1=2)Step-beam
+(B1=3)MCTS3035404550Accuracy(%)round 1 round 2 round 3 (b) GaoKao2023 (Out-of-Domain)
+Figure 5: Comparison of Different Inference Strategies
+Table 3: Analysis of Computational Efficiency on MATH dataset
+Inference
+StrategyAcc.Solve time
+per question (s)Avg. Steps
+Greedy 53.48 1.6 3.10
+Maj. V oting @5 61.84 +8.36 2.9 2.88
+Step beam search B1= 1 59.78 +6.30 3.1 3.01
+Step beam search B1= 2 62.48 +9.00 2.4 2.36
+Step beam search B1= 3 63.54 +10.06 2.3 2.21
+MCTS 63.72 +10.24 20.3 3.76
+general increase in performance with additional rounds of training across all strategies, applicable to
+both in-domain and out-of-domain test sets. Specifically, for step-level beam search, an enhancement
+in performance was observed with an increase in the beam size B1. Although MCTS exhibited
+the highest performance, we previously noted its significant time consumption and computational
+inefficiency. Consequently, we provide a summary of the average problem-solving duration and
+the average number of intermediate steps taken on the MATH dataset in Table 3. The data indicate
+that MCTS demands the longest solving time and the highest number of steps, attributable to our
+configuration of 30 simulations and 5 leaf nodes. To achieve similar accuracy, step-level beam search
+withB1= 3, B2= 5 is more computationally friendly. Additionally, we observe an intriguing
+phenomenon: a larger beam size B1tends to reduce the average problem-solving duration. This can
+be attributed to the decrease in the number of average steps required when a larger B1is employed.
+Discussion of Majority Voting It is challenging to directly compare maj@5 with step-level beam
+search due to the inherent differences in their methodologies. Maj@5 involves generating 5 complete
+solutions with all intermediate steps considered. From the step-level perspective, for each step,
+maj@5 will select 5 candidates based on 5 different candidates from the previous step. In contrast,
+our proposed beam search method (e.g., B1= 1, B2= 5) will generate B1·B2= 5candidates for
+the current step but will ultimately retain only the top- B1= 1candidates, discarding the others. It
+means before proceeding to the next step, the step-level beam search is left with only 1 candidate.
+Therefore, theoretically, maj@5 is somewhat analogous to having some B1within the range [1,5].
+However, the specific mechanics of candidate selection and retention differ significantly.
+4.7 Analysis 3: Value Model
+In Figure 6, we plot the fitted distribution of Q-values (as defined in Eq. (7)) for intermediate steps
+(excluding the terminal step) from the 3rd round of MCTS applied to our training dataset. For
+correct solutions, the distribution is markedly skewed towards a value of 1, with the majority of the
+probability density concentrated near 1. In contrast, the distribution for incorrect solutions exhibits
+a lesser degree of skewness, albeit with the bulk of the probability density leaning towards -1. We
+assume that a correct final answer typically suggests that the entire solution process is likely accurate,
+9
+1.0
+ 0.5
+ 0.0 0.5 1.0
+Q values0246810Probability DensityCorrect Solution
+Incorrect SolutionFigure 6: Fitted distribution of Q-values for 3rd round MCTS
+whereas an incorrect final answer may still encompass some correct intermediate steps close to
+the root. In other words, the correct intermediate steps have the potential to lead both correct and
+incorrect final answers. Thus, with the backup of MCTS, the Q-values of intermediate steps in
+incorrect solutions may also be updated with a reward of 1 during simulations.
+5 Related Works
+Math Dataset Recent works [ 20,2,19,5,8,23] on mathematical reasoning have made impressive
+progress empowered by LLMs. However, the training data for all the aforementioned works are
+generated using formidable commercial models such as GPT-4 or through manual annotation, a
+process that hampers the scalability of the method and escalates the associated expenses. Unlike
+previous work, we leverage the strong linguistic capabilities and math knowledge of a base model by
+introducing Question-Answer pairs (Q&A pairs) data, and enhance the performance of this model
+through a self-improvement iteration strategy.
+Value/Reward Model Recent works [ 9,3,4,24,21] demonstrate that verification significantly
+improves performance on math reasoning. Especially, Process-Reward Model(PRM)[ 9] solves 78%
+of problems from a representative subset of the MATH test set. Reward model is the source of the
+training signal in Reinforcement Learning(RL) [ 14,15]. Although these works[ 10,12] explore the
+incorporation of the value model into the decoding process, the value/reward model remains primarily
+utilized as an auxiliary tool in RL. In our work, we adopt a strategy that merges the value model
+with the generative model, perfectly integrating the two models while also scoring the generated text
+during the decoding process, thereby providing a richer set of decoding strategies, such as step beam
+search, MCTS.
+6 Conclusion
+In this work, we have shown that a well-pre-trained large language model (LLM) can leverage Monte
+Carlo Tree Search (MCTS) to unlock its potential in identifying the correct mathematical reasoning
+process, independently of GPT-4 or a human-annotated supervised fine-tuning (SFT) dataset. Through
+the integration of iterative training with the policy and value models, the capability of the LLM to
+perform math reasoning tasks is significantly boosted. Notably, by applying step-level beam search,
+the value model can be used to select a more reasonable solution path. For our future work, we aim
+to explore the impact of expanding the diversity of incremental question-answer pairs for each round
+of MCTS on the model’s performance.
+10
+References
+[1]Zhangir Azerbayev, Hailey Schoelkopf, Keiran Paster, Marco Dos Santos, Stephen McAleer,
+Albert Q Jiang, Jia Deng, Stella Biderman, and Sean Welleck. Llemma: An open language
+model for mathematics. arXiv preprint arXiv:2310.10631 , 2023.
+[2]Wenhu Chen, Xueguang Ma, Xinyi Wang, and William W Cohen. Program of thoughts
+prompting: Disentangling computation from reasoning for numerical reasoning tasks. arXiv
+preprint arXiv:2211.12588 , 2022.
+[3]Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser,
+Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, Christopher Hesse, and John
+Schulman. Training verifiers to solve math word problems. arXiv preprint arXiv:2110.14168 ,
+2021.
+[4]Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser,
+Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, et al. Training verifiers to
+solve math word problems. arXiv preprint arXiv:2110.14168 , 2021.
+[5]Luyu Gao, Aman Madaan, Shuyan Zhou, Uri Alon, Pengfei Liu, Yiming Yang, Jamie Callan,
+and Graham Neubig. Pal: Program-aided language models. In International Conference on
+Machine Learning , pages 10764–10799. PMLR, 2023.
+[6]Zhibin Gou, Zhihong Shao, Yeyun Gong, Yujiu Yang, Minlie Huang, Nan Duan, Weizhu Chen,
+et al. Tora: A tool-integrated reasoning agent for mathematical problem solving. arXiv preprint
+arXiv:2309.17452 , 2023.
+[7]Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn
+Song, and Jacob Steinhardt. Measuring mathematical problem solving with the math dataset.
+NeurIPS , 2021.
+[8]Minpeng Liao, Wei Luo, Chengxi Li, Jing Wu, and Kai Fan. Mario: Math reasoning with code
+interpreter output–a reproducible pipeline. arXiv preprint arXiv:2401.08190 , 2024.
+[9]Hunter Lightman, Vineet Kosaraju, Yura Burda, Harri Edwards, Bowen Baker, Teddy Lee, Jan
+Leike, John Schulman, Ilya Sutskever, and Karl Cobbe. Let’s verify step by step. arXiv preprint
+arXiv:2305.20050 , 2023.
+[10] Jiacheng Liu, Andrew Cohen, Ramakanth Pasunuru, Yejin Choi, Hannaneh Hajishirzi, and
+Asli Celikyilmaz. Don’t throw away your value model! generating more preferable text with
+value-guided monte-carlo tree search decoding, 2024.
+[11] Zimu Lu, Aojun Zhou, Houxing Ren, Ke Wang, Weikang Shi, Junting Pan, Mingjie Zhan,
+and Hongsheng Li. Mathgenie: Generating synthetic data with question back-translation for
+enhancing mathematical reasoning of llms. arXiv preprint arXiv:2402.16352 , 2024.
+[12] Xin Mao, Feng-Lin Li, Huimin Xu, Wei Zhang, and Anh Tuan Luu. Don’t forget your reward
+values: Language model alignment via value-based calibration, 2024.
+[13] OpenAI. Gpt-4 technical report, 2023.
+[14] Long Ouyang, Jeff Wu, Xu Jiang, Diogo Almeida, Carroll L. Wainwright, Pamela Mishkin,
+Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, John Schulman, Jacob Hilton,
+Fraser Kelton, Luke Miller, Maddie Simens, Amanda Askell, Peter Welinder, Paul Christiano,
+Jan Leike, and Ryan Lowe. Training language models to follow instructions with human
+feedback, 2022.
+[15] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Mingchuan Zhang, YK Li,
+Y Wu, and Daya Guo. Deepseekmath: Pushing the limits of mathematical reasoning in open
+language models. arXiv preprint arXiv:2402.03300 , 2024.
+[16] David Silver, Aja Huang, Chris J Maddison, Arthur Guez, Laurent Sifre, George Van Den Driess-
+che, Julian Schrittwieser, Ioannis Antonoglou, Veda Panneershelvam, Marc Lanctot, et al. Mas-
+tering the game of go with deep neural networks and tree search. nature , 529(7587):484–489,
+2016.
+11
+[17] David Silver, Julian Schrittwieser, Karen Simonyan, Ioannis Antonoglou, Aja Huang, Arthur
+Guez, Thomas Hubert, Lucas Baker, Matthew Lai, Adrian Bolton, et al. Mastering the game of
+go without human knowledge. nature , 550(7676):354–359, 2017.
+[18] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Almahairi, Yasmine Babaei,
+Nikolay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, et al. Llama 2: Open
+foundation and fine-tuned chat models. arXiv preprint arXiv:2307.09288 , 2023.
+[19] Ke Wang, Houxing Ren, Aojun Zhou, Zimu Lu, Sichun Luo, Weikang Shi, Renrui Zhang, Linqi
+Song, Mingjie Zhan, and Hongsheng Li. Mathcoder: Seamless code integration in llms for
+enhanced mathematical reasoning, 2023.
+[20] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi, Quoc V Le,
+Denny Zhou, et al. Chain-of-thought prompting elicits reasoning in large language models.
+Advances in Neural Information Processing Systems , 35:24824–24837, 2022.
+[21] Yuxi Xie, Kenji Kawaguchi, Yiran Zhao, Xu Zhao, Min-Yen Kan, Junxian He, and Qizhe Xie.
+Decomposition enhances reasoning via self-evaluation guided decoding, 2023.
+[22] Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik R Narasimhan, and
+Yuan Cao. React: Synergizing reasoning and acting in language models. In The Eleventh
+International Conference on Learning Representations , 2022.
+[23] Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Thomas L Griffiths, Yuan Cao, and Karthik
+Narasimhan. Tree of thoughts: Deliberate problem solving with large language models. arXiv
+e-prints , pages arXiv–2305, 2023.
+[24] Fei Yu, Anningzhe Gao, and Benyou Wang. Outcome-supervised verifiers for planning in
+mathematical reasoning. arXiv preprint arXiv:2311.09724 , 2023.
+[25] Xiang Yue, Xingwei Qu, Ge Zhang, Yao Fu, Wenhao Huang, Huan Sun, Yu Su, and Wenhu
+Chen. Mammoth: Building math generalist models through hybrid instruction tuning. arXiv
+preprint arXiv:2309.05653 , 2023.
+[26] Boning Zhang, Chengxi Li, and Kai Fan. Mario eval: Evaluate your math llm with your math
+llm–a mathematical dataset evaluation toolkit. arXiv preprint arXiv:2404.13925 , 2024.
+12
+Table 4: Test Sets Statistics
+Dataset OOD? #Samples
+GSM8K [3] IND 1319
+MATH [7] IND 5000
+GaoKao2023 [8] OOD 385
+7 Implementation Details
+7.1 Definition of PUCT
+Puct(πk, N(s,a)) =cpuctπkpP
+bN(s,b)
+1 +N(s,a)(11)
+7.2 Parameter Details
+For the solution generation via MCTS , we set cpuct= 1.5, the temperature to 0.6, limit the
+maximum tree depth to 8, each node is extended by maximum 5 child nodes, and a maximum of 40
+simulations. We build 10 trees for each question-answer pair and randomly sample both at most 4
+correct and 4 incorrect solution process for training. In this setting, the ratio of positive to negative
+examples is approximately 1:1, and the count of positive examples varies between 58k to 59k for
+each round.
+For supervised fine-tuning , we set a learning rate of 4e-5, a batch size of 1024, set the weight of
+the value loss to 0.01, and train the model for 10 epochs. We employ the AdamW optimizer and the
+cosine learning rate scheduler with the warmup rate set to 0.03.
+7.3 Datasets Details
+Table 4 presents the statistical data of the test set.
+8 Prompts
+We provide instructions and examples for generating solutions and performing reasoning. For the
+solution generation through MCTS in the first round, the pre-trained models such as DeepseekMath-
+base [ 15] may not adhere to instructions. Therefore, we employ few-shot learning to guide the model
+towards producing outputs in the format of Thought/Action/Action Input/Observation. Subsequently,
+we train the model using a format similar to XML, and proceed with the solution generation and
+reasoning in this format.
+8.1 Prompt Example of MCTS in Round 1
+We employ few-shot learning to steer pre-trained models towards performing mathematical reasoning,
+ensuring the output conforms to the format of Thought/Action/Action Input/Observation. As the
+following example shows, the text in black is prompt, and the text in red is model generation.
+You are a powerful agent with broad math knowledge and great Python programming
+skills, but not good at accurate calculation on math equations. Answer the math
+questions as best you can. You have access to the following tool:
+Python_interpreter: A Python shell. Use this to execute python commands.
+!!!Remember:
+1. When solving math problem, you should think step by step, where each step
+includes 4 mini-steps Thought/Action/Action Input/Observation.
+13
+2. If some step requires accurate calculation (including but not limited to
+numerical calculation and symbolic deduction), you should write Python code and
+execute for accurate result.
+3. The most related Python packages include `math `,`sympy `,`scipy `and `numpy `.
+4. Please use the following template.
+Question: the input question
+Thought: the text analysis, and list the math equations if necessary
+Action: the action to take, should be `Python_interpreter `, or None
+Action Input: the Python Code in markdown format (if Action is None, it is None),
+e.g.,
+```python
+import math
+theta = math.pi / 4
+some_var = math.cos(theta)
+print(some_var)
+```
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: the final analysis of the answer
+Final Answer: the concise answer without verbose context
+Here are some examples:
+<examples here>
+Now! It 's your turn.
+Question: Ben works 8-hour shifts in a furniture shop. It takes him 5 hours to
+build 1 rocking chair. How many chairs can he build in 10 days?
+Thought: To calculate the number of chairs Ben can build in 10 days, we need to
+first determine how many hours he would work in 10 days and then use the given
+information to calculate the number of chairs he can build in those hours.
+Action: python_interpreter
+Action Input: ```python
+hours_per_day = 8
+total_days = 10
+hours_in_10_days = hours_per_day * total_days
+chairs_per_hour = 1 / 5
+chairs_in_10_days = hours_in_10_days * chairs_per_hour
+print(chairs_in_10_days)
+```
+Observation: 16.0
+Thought: I have calculated the number of chairs Ben can build in 10 days. The number
+14
+of chairs is 16.
+Final Answer: 16
+8.2 Prompt Example of MCTS after Round 1
+To train the SFT model in executing mathematical reasoning, we utilize an XML format alongside
+zero-shot learning. This approach is adopted because the math-related pre-training corpora are
+predominantly harvested from the Internet, where HTML tags serve to distinguish various types of
+content, including text, equations, and code snippets. As the following example shows, the text in
+black is prompt, and the text in red is model generation.
+<question>Haley grows at the rate of 3 inches every year. If she is currently 20 inches
+tall, what will be her height after 10 years?</question>
+<step>
+<p>
+To calculate Haley 's height after 10 years, I need to add 10 times the growth rate of 3
+inches to her current height.
+</p>
+<code>
+```python
+current_height = 20
+growth_rate = 3
+years = 10
+future_height = current_height + (growth_rate * years)
+print(future_height)
+```
+</code>
+<output>
+50
+</output>
+</step>
+<step>
+<p>
+I have calculated Haley 's height after 10 years. Haley will be 50 inches tall after 10
+years.
+</p>
+<p>
+Final Answer: $50$
+</p>
+</step>
+15

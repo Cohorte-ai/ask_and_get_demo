@@ -1,0 +1,833 @@
+When to Retrieve: Teaching LLMs to Utilize Information
+Retrieval Effectively
+Tiziano Labrunaa,b,*, Jon Ander Camposcand Gorka Azkuned
+aUniversity of Bozen-Bolzano
+bFondazione Bruno Kessler
+cCohere
+dHiTZ Center - Ixa, University of the Basque Country UPV/EHU
+ORCID (Tiziano Labruna): https://orcid.org/0000-0001-7713-7679, ORCID (Jon Ander Campos):
+https://orcid.org/0000-0002-1447-5870, ORCID (Gorka Azkune): https://orcid.org/0000-0002-2506-7426
+Abstract. In this paper, we demonstrate how Large Language Mod-
+els (LLMs) can effectively learn to use an off-the-shelf information
+retrieval (IR) system specifically when additional context is required
+to answer a given question. Given the performance of IR systems, the
+optimal strategy for question answering does not always entail exter-
+nal information retrieval; rather, it often involves leveraging the para-
+metric memory of the LLM itself. Prior research has identified this
+phenomenon in the PopQA dataset, wherein the most popular ques-
+tions are effectively addressed using the LLM’s parametric memory,
+while less popular ones require IR system usage. Following this, we
+propose a tailored training approach for LLMs, leveraging existing
+open-domain question answering datasets. Here, LLMs are trained
+to generate a special token, ⟨RET⟩, when they do not know the an-
+swer to a question. Our evaluation of the Adaptive Retrieval LLM
+(ADAPT -LLM) on the PopQA dataset showcases improvements over
+the same LLM under three configurations: (i) retrieving information
+for all the questions, (ii) using always the parametric memory of the
+LLM, and (iii) using a popularity threshold to decide when to use a
+retriever. Through our analysis, we demonstrate that A DAPT -LLM is
+able to generate the ⟨RET⟩token when it determines that it does not
+know how to answer a question, indicating the need for IR, while it
+achieves notably high accuracy levels when it chooses to rely only
+on its parametric memory.
+1 Introduction
+The task of question answering (QA) remains a focal point in Natural
+Language Understanding research. There are many different datasets
+serving as benchmarks for evaluating QA models, such as Natural
+Questions (NQ) [18], SQuAD [25] or QuAC [7], just to mention a
+few. Nowadays, Large Language Models (LLMs) consistently out-
+perform traditional methods on these benchmarks, showcasing re-
+markable performance.
+Typically, there are two primary approaches to utilize LLMs for
+question answering:
+(i)Closed Book Question Answering : This approach involves
+strategies like instruction tuning [32] or few-shot prompting [6] to
+enhance performance. Here, the LLM relies solely on its parametric
+∗Corresponding Author. Email: tlabruna@fbk.eu.memory to answer questions. However, these parametric memories
+have inherent limitations as they are based entirely on the training
+corpus, meaning for example that they could be outdated regarding
+events occurring after the training process.
+(ii)Open Book Question Answering : In this approach, the LLM
+is coupled with an Information Retriever (IR) system [13, 36]. By
+leveraging the IR system, the LLM can retrieve relevant context to
+supplement its understanding and provide more accurate answers.
+However, the research conducted by Mallen, Alex Troy and Asai,
+Akari and Zhong, Victor and Das, Rajarshi and Khashabi, Daniel and
+Hajishirzi, Hannaneh [22] sheds light on the complexity of question-
+answering strategies, challenging the notion that the optimal ap-
+proach always involves the utilization of an IR system. Through the
+introduction of the PopQA dataset, comprising 14 thousand ques-
+tions annotated with popularity scores, they demonstrated that while
+LLMs relying solely on their parametric memories excel in ad-
+dressing high-popularity questions, the efficacy diminishes for low-
+popularity questions, where using IR becomes curcial.
+Their findings underscore the importance of a hybrid approach,
+where LLMs utilize parametric memory for high-popularity ques-
+tions, but use an off-the-shelf IR system to retrieve relevant context
+to answer low-popularity questions. Central to their methodology is
+the establishment of a fixed popularity score threshold, which they
+use to decide whether an IR system has to be employed.
+In many cases, however, question answering datasets do not in-
+clude popularity scores, so relying on such scores is not a general-
+izable approach. Motivated by this limitation, our study aims to ad-
+dress whether LLMs can autonomously determine when to employ
+an IR system for improved question answering. To investigate this,
+we conduct an evaluation of an LLM using an open-domain question
+answering dataset to identify the questions for which the LLM pro-
+vides accurate responses and those where its answers are incorrect.
+Specifically, for questions where the LLM’s response is incorrect,
+we annotate them with a special token, ⟨RET⟩, indicating the need
+for additional context. Subsequently, we utilize these annotations to
+construct a new dataset tailored for training purposes, where we teach
+an LLM to answer directly if it is confident about the answer or to
+require context it believes is useful for answering the question (see
+Figure 1). Our hypothesis is that through this training process, the
+LLM learns to use an IR system when it needs extra context to answerarXiv:2404.19705v2  [cs.CL]  6 May 2024
+LLM
+1 1Question
+If not RETIf RET
+AnswerIR
+ LLM
+AnswerContext
+1 2
+1 31 4
+1 5Figure 1 : The inference process of A DAPT -LLM step-by-step: given a question (step 1), an LLM decides (step 2) whether to answer the
+question directly (step 3) or to ask for additional contextual information, generating the special ⟨RET⟩token; for the later, an off-the-shelf IR
+system is used to retrieve relevant context (step 4), which is used alongside the question to prompt again the LLM for the final answer (step 5).
+a question, thus we name it A DAPT -LLM.
+To validate our hypothesis, we conducted several experiments on
+the PopQA dataset [22], as it provides a suitable platform for bench-
+marking hybrid retrieval strategies. As a result of these experiments
+we find that:
+•ADAPT -LLM consistently outperforms typical fixed strategies for
+question answering, such as (i) using the IR system for all ques-
+tions and (ii) relying solely on the parametric memory of the LLM.
+•ADAPT -LLM demonstrates performance comparable to strategies
+that rely on popularity scores to determine when to use an IR sys-
+tem, even without utilizing any popularity score or similar metric.
+It’s worth noting that popularity scores are a unique feature of the
+PopQA dataset, rendering them inapplicable to other open-domain
+question answering datasets.
+•When A DAPT -LLM decides to retrieve additional information,
+the results obtained with the context are significantly better than
+those without it. Similarly, when A DAPT -LLM directly answers
+questions relying on its parametric memory, it achieves high ac-
+curacies. These observations indicate that the model effectively
+discerns when to retrieve information and when it can answer a
+question without further context.
+•The primary bottleneck for the performance of A DAPT -LLM lies
+in the IR system. A DAPT -LLM achieves much higher perfor-
+mance with gold passages compared to passages retrieved by the
+IR system.
+Our findings underscore the significance of adaptive retrieval
+strategies in enhancing the performance of LLMs for question an-
+swering tasks. By training A DAPT -LLM to dynamically determine
+when to retrieve additional context, we demonstrate the feasibility
+of teaching an LLM how to effectively leverage external information
+sources only when necessary.
+2 Related Work
+Retrieval-Augmented Generation (RAG) [19] has shown improve-
+ments on a wide variety of NLP areas, such as question answer-
+ing [17, 13, 31, 23], truthfulness [14, 21] and language modelling[12, 5, 26] among others. The ability to ground model generations
+on retrieved text chunks has also enabled smaller models to match
+the performance of larger ones [2]. Moreover, due to the extremely
+high cost of training LLMs, RAG has become the standard way to
+maintain them updated with new information, not having to re-train
+the models periodically to incorporate new facts [10].
+Even if augmenting LLMs with retrieval is an essential step for the
+current generation of LLMs [15, 27] it also comes with a cost. Tra-
+ditional retrieval methods as TF-IDF or BM-25 [29] are only able to
+retrieve documents with keyword overlap and suffer from lexical gap
+[4]. In order to try to solve this issue, many pre-trained Transformer
+encoder based dense models have been proposed [9, 28, 17, 11].
+Trained neural models have shown good performance over a variety
+of retrieval benchmarks but they still struggle in the zero-shot setup
+for new domains [33]. The quality of the retrieval engine is essential
+for retrieval-augmented models as this will set the upper bound of
+the model performance. Moreover, the usage of a retrieval engine,
+especially when the target document index is huge, can significantly
+increase the latency of the model and hurt real time applications user
+experience [3].
+On the other hand, as models keep scaling, the world knowledge
+encoded in their parameters does too [16]. Many previous efforts
+have shown that language models are able to memorize a significant
+amount of world knowledge and achieve competitive performance
+on tasks such as open-domain question answering when they just use
+their parametric knowledge for solving the task [20, 1, 34, 35].
+Motivated by all this, the adaptive approach has been proposed
+as a new solution [30, 22]. In this approach, if the solution to the
+task is encoded in the parameters of the model, the model will be
+directly used for generating a solution. Conversely, if the answer is
+not encoded in the knowledge of the model, the answer generation
+will be augmented with external knowledge.
+Recently, Schick et al. [30] proposed the Toolformer, a model that
+can self teach how and when to use external tools via simple API
+calls including a calculator, search engines, a calendar and so on.
+The self learning process is based on a synthetic text only corpus
+that is enriched by prompting an LLM. The LLM first adds inline
+API calls on top of the unsupervised corpus. These API calls are
+then validated by evaluating whether the execution of the API calls
+is helpful for predicting the future tokens. This unsupervised method
+significantly boosts model performance in a variety of tasks when
+compared against non augmented LLMs, but it also makes the model
+over use tools. As an example, for the QA task the model uses the
+search engine 99.3% of the cases. On our work, we try to take ad-
+vantage of the parametric knowledge of LLMs and just perform re-
+trieval when needed. A DAPT -LLM decreases the usage of IR down
+to 83.99% while improving performance over vanilla retrieval.
+More similar to our work, Mallen, Alex Troy and Asai, Akari
+and Zhong, Victor and Das, Rajarshi and Khashabi, Daniel and Ha-
+jishirzi, Hannaneh [22] propose a dataset and method for measuring
+when non-parametric information needs to be retrieved. They present
+the PopQA dataset that contains 14K questions about a set of enti-
+ties with varying popularity. The popularity of an entity is measured
+by the page views of its Wikipedia page. In order to solve this QA
+task, they use a popularity score threshold calculated on the PopQA
+dataset. If the popularity score of an individual entity is below the
+threshold they perform a retrieval step. On the contrary, if the score
+is greater than the threshold they directly answer the question. This
+method yields better results than vanilla retrieval but it requires the
+calculation of a popularity score that is not available in realistic QA
+scenarios.
+Another relevant contribution in this field, contemporaneous with
+our research, is the work by Erbacher et al. [8], where they trained
+an LLM to determine when to utilize external knowledge. They par-
+ticularly focused on finding the optimal trade-off between the risk
+of hallucination and the cost of information retrieval, given the po-
+tentially high expense associated with IR. Our A DAPT -LLM method
+adopts a similar approach, training an LLM to learn when to retrieve
+information. However, we extend this by comparing our method’s
+performance against some baselines, and assess the effectiveness of
+retrieving information in an adaptive manner against the strategies of
+never retrieving or always retrieving.1
+3 Adaptive Retrieval LLM (A DAPT -LLM)
+Adaptive retrieval refers to the model’s capability to dynamically de-
+termine whether to retrieve additional context information for gener-
+ating answers in question answering tasks. Unlike traditional models
+that either always incorporate context or never consider it, adaptive
+retrieval allows the model to selectively retrieve context based on the
+specific requirements of each question. This adaptive approach aims
+to optimize performance by leveraging context only when necessary,
+thereby enhancing the model’s ability to generate accurate answers.
+As depicted in Figure 1, the process of the A DAPT -LLM unfolds
+in the following sequence:
+1. The first prompt containing the question is sent to the model (step
+1 of Figure 1).
+2. The A DAPT -LLM evaluates the prompt to determine whether ad-
+ditional context is necessary to answer the question effectively
+(step 2).
+3. If the model determines that context is not required, it directly
+produces a response to the question by leveraging its parametric
+memory (step 3).
+4. If context is deemed necessary, the A DAPT -LLM model returns
+a special token, represented as ⟨RET⟩, and an off-the-shelf IR
+system is used to retrieve pertinent context based on the question
+1All resources are publicly available at https://github.com/tLabruna/Adapt-
+LLM.Algorithm 1: Training data creation
+Input: Q: questions, A: answers, P: passages, LLM
+Output: DSAdapt : A training dataset for Adaptive Retrieval
+1DSAdapt = init_empty()
+2forq, gold_ans, pass in (Q, A, P) do
+3 ans = LLM(q)
+4 ifans = gold_ans then
+5 inst = build_instance(’parametric_prompt’, q,
+gold_ans)
+6 DSAdapt .add(inst)
+7 end
+8 else
+9 inst1 = build_instance(’parametric_prompt’, q,
+"<RET>")
+10 DSAdapt .add(inst1)
+11 inst2 = build_instance(’context_prompt’, q, gold_ans,
+pass)
+12 DSAdapt .add(inst2)
+13 end
+14end
+15returnDSAdapt
+(step 4); the context is then combined with the original question
+prompt to form a comprehensive representation for answer gener-
+ation (step 5).
+The decision-making process of A DAPT -LLM enables the model
+to determine the necessity of context for answering questions through
+dynamic assessment of each prompt. This flexible behavior allows
+the model to strike a balance between utilizing context for enhanced
+understanding and delivering direct answers when sufficient.
+3.1 Training ADAPT -LLM
+Here, we delineate the methodology employed to train our A DAPT -
+LLM model. The process of crafting the training data, denoted as
+DSAdapt , is presented in Algorithm 1.
+We begin by selecting an open-domain question answering dataset
+containing questions Q, associated context passages P, and corre-
+sponding answers A. We initialize DSAdapt to an empty set (line 1
+of the algorithm). For each question in Q, we leverage the base LLM
+without any retrieval mechanism to perform a zero-shot inference
+(line 3). This step allows us to differentiate questions for which the
+model generates correct answers from those where its responses are
+inaccurate. This process can be understood as a way to discover what
+the base LLM knows due to its parametric memory. For questions
+where the model’s response is accurate (line 4), we build a training
+set instance incorporating the following prompt, which we call para-
+metric_prompt :
+Prompt: Answer the question Q. If you need
+help answer <RET> to get the context. Q:
+{...}
+Alongside this prompt, we include the corresponding question
+fromQand the golden answer from A, collectively forming the
+instance (line 5), which is subsequently appended to the DSAdapt
+dataset (line 6).
+In contrast, if the LLM fails to produce a correct response to the
+question (line 8), we build two different instances. The first employs
+Training Set Model configuration Accuracy
+NQNEVER RETRIEVE 21.43%
+ALWAYS RETRIEVE 35.86%
+ADAPT -LLM (ours) 36.77%
+SQUADNEVER RETRIEVE 21.22%
+ALWAYS RETRIEVE 36.59%
+ADAPT -LLM (ours) 38.15%
+Table 1 : Performance comparison of Llama-2 models trained on
+the NQ and SQuAD datasets using different retrieval configurations
+(NR-LLM, AR-LLM, and A DAPT -LLM), evaluated on the PopQA
+test set. Exact match accuracy is reported for all models.
+the same parametric_prompt as previously described, with ⟨RET⟩
+designated as the answer (line 9), indicating the necessity for addi-
+tional context. The second prompt, termed context_prompt , encom-
+passes contextual information alongside the question:
+Prompt: Answer the question Q given the
+context C. Q: {...}, C: {...}
+For this instance, we include the prompt, the question from Q, the
+golden answer from A, and the corresponding context passage from
+P(line 11).
+After populating the dataset with both types of prompts for ques-
+tions where the LLM could not respond accurately and only the para-
+metric_prompt with golden answers for all other questions, our train-
+ing set DAdapt is prepared for the subsequent fine-tuning phase. The
+fine-tuning process entails training the base LLM on our dataset, re-
+sulting in the A DAPT -LLM model.
+This approach ensures that the model effectively learns to discern
+when context is necessary for answering questions, or to provide a
+direct response when it suffices, as well as answer directly when pro-
+vided with context.
+3.2 Inference
+In the inference phase, we utilize the fine-tuned model to generate
+responses to unseen questions. We employ the same prompts used
+during the training phase, as outlined in Section 3.1.
+Initially, the model is prompted to either provide a direct response
+or return ⟨RET⟩if it is unsure of the answer. If the model returns
+⟨RET⟩, we proceed with information retrieval to acquire relevant
+context by means of an off-the-shelf IR system. Subsequently, we
+augment the question with the retrieved context and prompt the
+model again using the second type of prompt introduced during the
+training phase.
+4 Experiments and Results
+In this section, we outline the experimental framework aimed at as-
+sessing the performance of the proposed adaptive retrieval approach,
+ADAPT -LLM. We begin by describing the datasets utilized (Sec-
+tion 4.1), followed by an overview of our base model (Section 4.2),
+the different configurations of the base model (Section 4.3), and the
+training details (Section 4.4). Subsequently, we introduce the three
+primary experiments:
+1. Evaluation of A DAPT -LLM performance compared to the follow-
+ing baseline models: (i) an LLM that retrieves contextual informa-
+tion for all questions, and (ii) an LLM that exclusively relies on itsNQ SQuAD PopQA
+Questions 58,880 87,599 14,282
+Words/question 9.20 10.06 6.62
+Words/answer 2.26 3.16 2.04
+Table 2 : Comparison of the three datasets we use for our experiments,
+i.e. SQuAD, NQ and PopQA. For each of them we provide the num-
+ber of questions, and the average number of words per question and
+answer.
+parametric memory without using an IR system for any question
+(Section 4.5).
+2. Analysis of A DAPT -LLM’s ability to determine when extra con-
+text is necessary to answer a question (Section 4.6).
+3. Comparison with the state-of-the-art approach for PopQA (Sec-
+tion 4.7).
+4.1 Datasets
+To ensure comprehensive training and evaluation of our models, we
+specifically selected three diverse question answering datasets. For
+training, we chose NQ [18] and SQuAD [25], as they are widely
+recognized datasets that assess factual knowledge and are based on
+Wikipedia. For evaluation, we opted for PopQA [22]. Below are brief
+descriptions of each dataset:
+NQ The Natural Questions dataset [18] is a collection of real-world
+questions derived from Google search queries, accompanied by long-
+form text passages obtained from Wikipedia articles and providing a
+diverse range of topics and natural language variations. We utilize
+this dataset for training our models in the experiments.
+SQuAD The Stanford Question Answering Dataset SQuAD [25]
+is a widely utilized dataset in the field of natural language processing
+and comprises questions posed by crowdworkers on a diverse range
+of Wikipedia articles, along with relevant paragraph passages serv-
+ing as context. We utilize this dataset for training our models in the
+experiments.
+PopQA The Popular Questions and Answers dataset [22] consists
+of curated questions sourced from various online platforms, encom-
+passing a wide range of domains and styles. Given the variability
+in the effectiveness of context retrieval strategies observed in this
+dataset, we select PopQA as our test set to evaluate the language
+models’ performance in determining when context is necessary for
+accurate answer provision.
+4.2 Base Model
+In our experiments, we employ Llama-2 [34] as our base LLM.
+Llama-2 is an open-source instruction-based LLM, which comes in
+versions of 7B, 13B, and 70B parameters. The model is pretrained
+on an expanded corpus sourced from publicly available online data
+sources. This corpus offers a 40% increase in size compared to its
+predecessor, contributing to the model’s enhanced performance and
+capabilities.
+Additionally, Llama-2 features an extended context length, ef-
+fectively doubling its capacity to process and comprehend longer
+sequences of text. These enhancements significantly improve the
+model’s effectiveness across various natural language understanding
+tasks. Specifically, for our experiments, we utilize the Llama-2 model
+Training ⟨RET ⟩Usage ⟨RET ⟩ No⟨RET ⟩
+Acc. w/ context Acc. w/o context Acc. w/ context Acc. w/o context
+NQ 82.26% 33.04% 14.65% 55.72% 62.36%
+SQuAD 83.93% 33.40% 9.94% 57.73% 62.92%
+Table 3 : Results of the usage of the ⟨RET⟩token in the A DAPT -LLM model. The first column shows the percentage of PopQA questions for
+which the model requests additional context. The second column focuses on the questions for which A DAPT -LLM asks for context ( ⟨RET⟩),
+comparing the performance between answering those questions with and without context. The last column (No ⟨RET⟩) is for questions which
+ADAPT -LLM decides to answer directly. We also compare the performance with and without the context retrieved by the IR system.
+with 7B parameters, leveraging its robust capabilities for our specific
+research objectives.
+4.3 Model Configurations
+We conduct the experiments using three different model configura-
+tions, corresponding to the three different ways in which an LLM and
+an IR system can be combined:
+•Adaptive Retrieval (A DAPT -LLM) . The A DAPT -LLM model
+dynamically decides whether to retrieve context based on the
+question and its perceived need for contextual information, as ex-
+plained in Section 3.1. As the IR system, we use Contriever [11],
+which is an unsupervised model pretrained on a large corpus, fol-
+lowed by fine-tuning on MS MARCO [24]. We only retrieve the
+most relevant passage according to the IR system to prompt the
+base LLM for the final answer.
+•Never-Retrieve (NR-LLM) . This model configuration is trained
+to answer questions solely based on the question text without con-
+sidering any contextual information. It serves as the baseline for
+evaluating the performance of question answering models in the
+absence of context.
+•Always-Retrieve (AR-LLM) . In contrast to the NR-LLM model,
+this configuration always retrieves context passages to assist in
+answering questions. It is trained to utilize context consistently
+for generating answers. To ensure a fair comparison with A DAPT -
+LLM, we also use Contriever [11] as the IR system and only re-
+trieve the most relevant passage as context.
+4.4 Training Details
+For all three model configurations (A DAPT -LLM, AR-LLM and NR-
+LLM) and both training sets (SQuAD and NQ), we adhere to the
+parameter configuration established in Alpaca-Lora [32] which in-
+cludes a batch size of 128, three epochs, and a fixed learning rate of
+3e-4. We incorporated LoRA (Low-Rank Adaptation) regularization,
+with parameters configured for r=8, alpha=16, and a dropout rate of
+0.05. Training was performed on an NVIDIA A40 GPU, for an av-
+erage training time of approximately 8 hours. We do not perform
+any model selection and we use the last checkpoint after 3 epochs of
+training.
+4.5 Validating the Adaptive Retrieval Approach
+In order to assess the effectiveness of our adaptive approach (A DAPT -
+LLM) in comparison to the NR-LLM and AR-LLM configurations,
+we conducted fine-tuning of the Llama-2 model on both the NQ and
+SQuAD datasets across all three configurations. For the NR-LLM
+and AR-LLM configurations, we constructed training samples by ex-
+tracting question-answer pairs from the datasets and incorporating
+corresponding instruction prompts.Specifically, prompts for the NR-LLM configuration instructed
+the model to answer questions without additional context, whereas
+prompts for the AR-LLM configuration included both the question
+and contextual information. In contrast, the A DAPT -LLM training
+set was constructed following the approach outlined in Section 3.1,
+employing a two-step process. As a result of this process, the 74.72%
+of the questions in NQ are marked with the ⟨RET⟩token, whereas the
+87.49% questions are marked for SQuAD.
+The trained models were then tested on the PopQA dataset to eval-
+uate their performance in a real-world question answering scenario.
+During inference, the NR-LLM and AR-LLM models were utilized
+as is, with corresponding instruction prompts provided, and outputs
+expected to be answers to the questions. Conversely, for the A DAPT -
+LLM model, we followed the same prompt procedure as explained
+in Section 3.2.
+The generated answers are then compared to the set of possi-
+ble answers for each question, which are already annotated in the
+PopQA test set. The evaluation metric used is Exact Match Accu-
+racy , which measures the percentage of generated outputs that ex-
+actly match one of the possible answers for the corresponding ques-
+tion.
+Table 1 presents the results of this experiment, illustrating the per-
+formance of the Llama-2 model across the different configurations
+and datasets. Across both the NQ and SQuAD training datasets, the
+ADAPT -LLM configuration consistently outperforms the Never Re-
+trieve (NR-LLM) and Always Retrieve (AR-LLM) configurations on
+the PopQA test set. As can be observed, NR-LLM exhibits the lowest
+performance among the models, with an accuracy difference of ap-
+proximately 14 absolute points compared to the other configurations.
+This disparity suggests that the parametric memory of Llama-2 alone
+is not sufficient for effectively answering PopQA questions.
+The differences between AR-LLM and A DAPT -LLM are nar-
+rower. Specifically, the A DAPT -LLM configuration achieves an ac-
+curacy of 36.77% and 38.15% on the PopQA test set when trained
+on the NQ and SQuAD datasets, respectively, compared to 35.86%
+and 36.59% for the AR-LLM configuration. Across both training
+datasets, A DAPT -LLM outperforms AR-LLM, with the largest dif-
+ference observed when trained on SQuAD.
+All in all, these results underscore the efficacy of the adaptive re-
+trieval approach in dynamically determining the necessity of context
+for accurate question answering, resulting in improved performance
+compared to fixed strategies of always or never retrieving context.
+Although the disparity between training A DAPT -LLM on NQ or
+SQuAD is relatively minor, we try to determine the suitability of a
+training set for a given evaluation set. While both training sets (NQ
+and SQuAD) and the evaluation set (PopQA) are based on Wikipedia,
+subtle differences may exist.
+Table 2 provides insights into the characteristics of the three
+datasets involved in our experimental procedure, including the to-
+tal number of questions and the average number of words per ques-
+Figure 2 : Histograms depicting the proportion of questions where A DAPT -LLM trained on NQ (left) and A DAPT -LLM trained on SQuAD
+(right) ask for extra context for different popularity score intervals.
+tion and answer. While NQ appears to be closer to PopQA in terms
+of question and answer lengths, the key factor influencing the bet-
+ter results of training A DAPT -LLM on SQuAD may be the number
+of questions in the training dataset ( ∼87K in SQuAD and ∼58K in
+NQ). Further analyses are required to elucidate the factors that ren-
+der a training dataset more suitable for a given target dataset (which
+is beyond the scope of our study), but these results suggest that scale
+may play once again a crucial role.
+4.6 Contextual Retrieval Decision Analysis
+In this experiment, our objective is to once again evaluate the effec-
+tiveness of the A DAPT -LLM model, this time focusing on its ability
+to accurately determine when additional context is needed. For this
+purpose, we adhere to the following steps:
+1. We conduct inference on the A DAPT -LLM model using the
+PopQA test set, prompting it to either return an answer directly
+or indicate the need for additional context by returning ⟨RET⟩.
+2. In the case of receiving a ⟨RET⟩response from the A DAPT -LLM
+model, we proceed with the following steps:
+2.1. We conduct inference on the A DAPT -LLM model, prompting
+it to return an answer given the context obtained from the IR
+system.
+2.2. We also conduct inference on the NR-LLM model with the in-
+struction to provide an answer directly without additional con-
+text.
+3. If the A DAPT -LLM model decides to answer the question directly
+relying only on its parametric memory:
+3.1. We conduct inference on the A DAPT -LLM model, prompting
+it to return the answer without providing context.
+3.2. We conduct inference on the AR-LLM model with the instruc-
+tion to provide an answer using the context retrieved by the IR
+system.
+Table 3 presents the results of this experiment. The first thing to
+note is that the A DAPT -LLM model generates the ⟨RET⟩token for
+approximately 82-83% of the questions in the PopQA dataset, withPassagesSQuAD Dev NQ Dev
+Acc. Acc.
+Gold 89.42% 69.76%
+Contriever 22.49 27.04%
+Table 4 : Performance comparison of A DAPT -LLM for the SQuAD
+and NQ dev sets, when using the gold passages provided by the
+datasets and when using the best passage retrieved by Contriever.
+similar ratios observed across both training datasets. This observa-
+tion aligns with the low performance of the NR-LLM configuration
+demonstrated in Table 1.
+However, A DAPT -LLM consistently determines when additional
+context is required to answer a question accurately. Across both the
+NQ and SQuAD training datasets, A DAPT -LLM exhibits signifi-
+cantly higher accuracy when retrieving context compared to the NR-
+LLM model’s accuracy without context (as indicated in the ⟨RET⟩
+column of Table 3). Specifically, for the NQ dataset, the accuracy
+of the A DAPT -LLM model when requesting context is 33.04%,
+whereas the accuracy of the NR-LLM model without context re-
+trieval is notably lower at 14.65%. Similarly, for the SQuAD dataset,
+ADAPT -LLM achieves an accuracy of 33.40% with context retrieval,
+whereas the NR-LLM model’s accuracy without context is substan-
+tially lower at 9.94%.
+Finally, the last column of Table 3 (No ⟨RET⟩) shows the per-
+formance of A DAPT -LLM when answering questions based solely
+on its parametric memory. As can be seen, accuracies above 62%
+are obtained when no context is utilized, providing further evidence
+that A DAPT -LLM effectively discerns between retrieving context
+and providing direct answers to questions. Additionally, we evalu-
+ate the performance of these questions when context is added to the
+input, revealing significant decreases in accuracy of up to 7 absolute
+points.
+These findings provide insights into the effectiveness of the
+decision-making process employed by the A DAPT -LLM model in
+determining the necessity of additional context for accurate response
+generation and present empirical evidence of the necessity of per-
+forming dynamic context retrieval in improving the accuracy of ques-
+tion answering models.
+However, it is notable that the overall performance of the model
+when answering questions with retrieved context, as observed in
+Table 3 (approximately 33%), is relatively low. To further explore
+this observation, we conduct an additional experiment: evaluating
+ADAPT -LLM (both versions trained on NQ and SQuAD) on the NQ
+and SQuAD development splits, comparing performance when using
+the gold passages of the dataset and the context retrieved by our IR
+system, Contriever [11]. Unfortunately, PopQA does not provide the
+gold passages, so direct evaluation there was not possible.
+Table 4 presents the results of this experiment. A significant per-
+formance difference is observed between using the gold passage and
+the top passage retrieved by Contriever for both datasets (approxi-
+mately 67 absolute points for SQuAD and 42 for NQ). This indicates
+that Contriever, and current IR systems in general, do not consistently
+retrieve the most relevant passage to answer a given question. This
+observation underscores the importance of retrieving multiple doc-
+uments as context, as seen in the most successful open-domain QA
+systems [13], and highlights its impact on the overall performance of
+ADAPT -LLM in PopQA.
+To further validate the behavior of A DAPT -LLM when requesting
+additional context, Figure 2 illustrates the proportion of questions
+for which our model generates the ⟨RET⟩token, aggregated by pop-
+ularity score intervals (left image for A DAPT -LLM trained on NQ
+and right image for SQuAD). Mallen, Alex Troy and Asai, Akari
+and Zhong, Victor and Das, Rajarshi and Khashabi, Daniel and Ha-
+jishirzi, Hannaneh [22] suggest that high-popularity questions can
+be adequately answered using the parametric memory of the LLM,
+while lower popularity scores necessitate extra context. In Figure 2,
+we observe this pattern for both versions of A DAPT -LLM, indicat-
+ing that our model, despite lacking access to popularity scores during
+training or inference, has learned effective criteria for requesting ad-
+ditional context.
+4.7 Comparison with state-of-the-art methods
+We conducted a comparative analysis between our A DAPT -LLM
+model and the current state-of-the-art approach for PopQA proposed
+by Mallen, Alex Troy and Asai, Akari and Zhong, Victor and Das,
+Rajarshi and Khashabi, Daniel and Hajishirzi, Hannaneh [22]. Their
+methodology relies on the popularity score annotated in the PopQA
+dataset to determine whether a question requires additional context.
+To establish the optimal threshold for determining question popular-
+ity, Mallen, Alex Troy and Asai, Akari and Zhong, Victor and Das,
+Rajarshi and Khashabi, Daniel and Hajishirzi, Hannaneh [22] split
+the PopQA dataset into 75% as a development set for threshold de-
+termination and 25% as a test set. In the original paper, they apply
+this methodology to various LLMs available at that moment (Llama-
+2 was not released yet).
+To ensure a fair comparison between A DAPT -LLM and the
+popularity-based method, we replicated their approach using the
+Llama-2 7B model to determine the best popularity score threshold
+(found to be 707,000) using the same PopQA development set. This
+allowed us to obtain results consistent with their methodology while
+utilizing our base LLM. Similar to the original results in Mallen,
+Alex Troy and Asai, Akari and Zhong, Victor and Das, Rajarshi and
+Khashabi, Daniel and Hajishirzi, Hannaneh [22] when using smaller
+models, the popularity score threshold is almost equivalent to always
+retrieving contextual information for Llama-2 7B. The IR usage is of
+99.86% as presented in Table 5. This clearly shows how the popular-
+ity score method struggles with smaller size models, being GPT-3Model Configuration IR usage Accuracy
+POPULARITY SCORE 99.86% 36.81%
+ADAPT -LLM (NQ) 87.22% 35.30%
+ADAPT -LLM (SQ UAD) 83.99% 37.29%
+Table 5 : Performance comparison of Llama-2 base models trained on
+the SQuAD and NQ datasets for the A DAPT -LLM and P OPULARITY
+SCORE configurations. The later mimics the methodology proposed
+by Mallen, Alex Troy and Asai, Akari and Zhong, Victor and Das,
+Rajarshi and Khashabi, Daniel and Hajishirzi, Hannaneh [22] with
+the Llama-2 LLM as the base model.
+DAVINCI -003 the only model to get a IR usage below 80% in the
+original paper when using adaptive retrieval with the Contriever. Sub-
+sequently, we evaluated our A DAPT -LLM configuration on the same
+25% test set split and compared the outcomes with those obtained
+using the method described by Mallen, Alex Troy and Asai, Akari
+and Zhong, Victor and Das, Rajarshi and Khashabi, Daniel and Ha-
+jishirzi, Hannaneh [22]. This systematic comparison enabled us to
+assess the efficacy of our A DAPT -LLM model in relation to the cur-
+rent state of the art.
+The results of this experiment are presented in Table 5. We observe
+comparable performance between the replicated approach of Mallen,
+Alex Troy and Asai, Akari and Zhong, Victor and Das, Rajarshi
+and Khashabi, Daniel and Hajishirzi, Hannaneh [22] and A DAPT -
+LLM when trained on NQ and SQuAD datasets and tested on the
+25% subset of PopQA. It’s worth mentioning that A DAPT -LLM does
+not utilize any information from PopQA, unlike Mallen, Alex Troy
+and Asai, Akari and Zhong, Victor and Das, Rajarshi and Khashabi,
+Daniel and Hajishirzi, Hannaneh [22], who directly use the popu-
+larity score and a 75% portion of PopQA dataset to find an optimal
+value for that popularity score. This methodology is not generalizable
+to other open-domain question answering tasks since the popularity
+score is a unique feature of PopQA. However, A DAPT -LLM can be
+applied to any similar dataset. Given these characteristics, we be-
+lieve that the results obtained by A DAPT -LLM are even more signif-
+icant, offering comparable performance to an approach that utilizes
+dataset-specific information. These findings substantiate the validity
+of our approach, demonstrating its effectiveness even when trained
+on datasets different from the one used for testing.
+5 Conclusions
+In this paper, we introduce A DAPT -LLM, a LLM which learns to dis-
+cern when additional context is necessary for answering a question,
+rather than relying solely on its parametric memory. A DAPT -LLM
+is the result of fine-tuning a base LLM on an open-domain question
+answering dataset that has been modified to differentiate between
+questions answerable with the LLM’s parametric memory alone and
+those requiring supplementary context. To construct these training
+datasets, we initially subject the base LLM to zero-shot evaluation to
+determine its accuracy in answering questions. For questions where
+the model’s response is incorrect, we train the LLM to generate a
+special token, ⟨RET⟩, indicating the need for additional context.
+Through extensive experiments conducted on the PopQA dataset,
+we show that A DAPT -LLM performs better than its two fixed alter-
+natives: never retrieving and always retrieving relevant context infor-
+mation. Furthermore, our findings highlight A DAPT -LLM’s capabil-
+ity to effectively discern the necessity of additional context, which is
+the primary objective of this work.
+For future investigations, we propose exploring methods to en-
+hance performance when utilizing an IR system, such as incorpo-
+rating learnable sequential retrieval techniques. Furthermore, we be-
+lieve it would be valuable to conduct a more in-depth analysis of the
+interaction between training and testing datasets in the development
+of A DAPT -LLM systems.
+6 Acknowledgments
+This work received partial support from the Basque Government
+through research group funding IT1805-22 and the ICL4LANG
+project (grant no. KK-2023/00094). Additionally, we acknowledge
+the support of several MCIN/AEI/10.13039/501100011033 projects:
+(i) DeepKnowledge (PID2021-127777OB-C21) and funding from
+FEDER, EU; (ii) AWARE (TED2021-131617B-I00) and support
+from the European Union NextGenerationEU/PRTR. We express our
+gratitude to Carlos Domínguez for his assistance in the experimental
+setup and to Eneko Agirre for his valuable feedback and guidance.
+References
+[1] J. Achiam, S. Adler, S. Agarwal, L. Ahmad, I. Akkaya, F. L. Aleman,
+D. Almeida, J. Altenschmidt, S. Altman, S. Anadkat, et al. Gpt-4 tech-
+nical report. arXiv preprint arXiv:2303.08774 , 2023.
+[2] Amnon Catav and Roy Miara and Ilai Giloh and Nathan Cordeiro and
+Amir Ingber. RAG makes LLMs better and equal. 2024. URL https:
+//www.pinecone.io/blog/rag-study/.
+[3] S. Barnett, S. Kurniawan, S. Thudumu, Z. Brannelly, and M. Abdel-
+razek. Seven failure points when engineering a retrieval augmented
+generation system. arXiv preprint arXiv:2401.05856 , 2024.
+[4] A. Berger, R. Caruana, D. Cohn, D. Freitag, and V . Mittal. Bridging the
+lexical chasm: statistical approaches to answer-finding. In Proceedings
+of the 23rd annual international ACM SIGIR conference on Research
+and development in information retrieval , pages 192–199, 2000.
+[5] Borgeaud, Sebastian and Mensch, Arthur and Hoffmann, Jordan and
+Cai, Trevor and Rutherford, Eliza and Millican, Katie and Van Den
+Driessche, George Bm and Lespiau, Jean-Baptiste and Damoc, Bogdan
+and Clark, Aidan and others. Improving language models by retriev-
+ing from trillions of tokens. In International conference on machine
+learning , pages 2206–2240. PMLR, 2022.
+[6] Brown, Tom and Mann, Benjamin and Ryder, Nick and Subbiah,
+Melanie and Kaplan, Jared D and Dhariwal, Prafulla and Neelakantan,
+Arvind and Shyam, Pranav and Sastry, Girish and Askell, Amanda and
+others. Language models are few-shot learners. Advances in neural
+information processing systems , 33:1877–1901, 2020.
+[7] Choi, Eunsol and He, He and Iyyer, Mohit and Yatskar, Mark and
+Yih, Wen-tau and Choi, Yejin and Liang, Percy and Zettlemoyer, Luke.
+QuAC: Question Answering in Context. In Proceedings of the 2018
+Conference on Empirical Methods in Natural Language Processing ,
+pages 2174–2184, 2018.
+[8] P. Erbacher, L. Falissar, V . Guigue, and L. Soulier. Navigating uncer-
+tainty: Optimizing api dependency for hallucination reduction in closed-
+book question answering. arXiv preprint arXiv:2401.01780 , 2024.
+[9] T. Gao, X. Yao, and D. Chen. Simcse: Simple contrastive learning of
+sentence embeddings. In 2021 Conference on Empirical Methods in
+Natural Language Processing, EMNLP 2021 , pages 6894–6910. Asso-
+ciation for Computational Linguistics (ACL), 2021.
+[10] Gao, Yunfan and Xiong, Yun and Gao, Xinyu and Jia, Kangxiang and
+Pan, Jinliu and Bi, Yuxi and Dai, Yi and Sun, Jiawei and Wang, Haofen.
+Retrieval-augmented generation for large language models: A survey.
+arXiv preprint arXiv:2312.10997 , 2023.
+[11] Gautier, Izacard and Mathilde, Caron and Lucas, Hosseini and Sebas-
+tian, Riedel and Piotr, Bojanowski and Armand, Joulin and Edouard,
+Grave. Unsupervised dense information retrieval with contrastive learn-
+ing. Transactions on Machine Learning Research , 2022.
+[12] Guu, Kelvin and Lee, Kenton and Tung, Zora and Pasupat, Panupong
+and Chang, Ming-Wei. REALM: retrieval-augmented language model
+pre-training. In Proceedings of the 37th International Conference on
+Machine Learning . JMLR.org, 2020.
+[13] Izacard, Gautier and Grave, Edouard. Leveraging Passage Retrieval
+with Generative Models for Open Domain Question Answering. InEACL 2021-16th Conference of the European Chapter of the Associ-
+ation for Computational Linguistics , pages 874–880. Association for
+Computational Linguistics, 2021.
+[14] Ji, Ziwei and Lee, Nayeon and Frieske, Rita and Yu, Tiezheng and Su,
+Dan and Xu, Yan and Ishii, Etsuko and Bang, Ye Jin and Madotto, An-
+drea and Fung, Pascale. Survey of hallucination in natural language
+generation. ACM Computing Surveys , 55(12):1–38, 2023.
+[15] A. Q. Jiang, A. Sablayrolles, A. Roux, A. Mensch, B. Savary, C. Bam-
+ford, D. S. Chaplot, D. d. l. Casas, E. B. Hanna, F. Bressand, et al.
+Mixtral of experts. arXiv preprint arXiv:2401.04088 , 2024.
+[16] J. Kaplan, S. McCandlish, T. Henighan, T. B. Brown, B. Chess,
+R. Child, S. Gray, A. Radford, J. Wu, and D. Amodei. Scaling laws
+for neural language models. arXiv preprint arXiv:2001.08361 , 2020.
+[17] Karpukhin, Vladimir and Oguz, Barlas and Min, Sewon and Lewis,
+Patrick and Wu, Ledell and Edunov, Sergey and Chen, Danqi and Yih,
+Wen-tau. Dense Passage Retrieval for Open-Domain Question Answer-
+ing. In Proceedings of the 2020 Conference on Empirical Methods
+in Natural Language Processing (EMNLP) . Association for Computa-
+tional Linguistics, 2020.
+[18] Kwiatkowski, Tom and Palomaki, Jennimaria and Redfield, Olivia and
+Collins, Michael and Parikh, Ankur and Alberti, Chris and Epstein,
+Danielle and Polosukhin, Illia and Devlin, Jacob and Lee, Kenton and
+others. Natural questions: a benchmark for question answering research.
+Transactions of the Association for Computational Linguistics , 7:453–
+466, 2019.
+[19] Lewis, Patrick and Perez, Ethan and Piktus, Aleksandra and Petroni,
+Fabio and Karpukhin, Vladimir and Goyal, Naman and Küttler, Hein-
+rich and Lewis, Mike and Yih, Wen-tau and Rocktäschel, Tim and
+others. Retrieval-augmented generation for knowledge-intensive NLP
+tasks. Advances in Neural Information Processing Systems , 33:9459–
+9474, 2020.
+[20] P. Liang, R. Bommasani, T. Lee, D. Tsipras, D. Soylu, M. Yasunaga,
+Y . Zhang, D. Narayanan, Y . Wu, A. Kumar, et al. Holistic evaluation of
+language models. Transactions on Machine Learning Research , 2023.
+[21] Lin, Stephanie and Hilton, Jacob and Evans, Owain. TruthfulQA: Mea-
+suring How Models Mimic Human Falsehoods. In Proceedings of the
+60th Annual Meeting of the Association for Computational Linguistics
+(Volume 1: Long Papers) , pages 3214–3252, 2022.
+[22] Mallen, Alex Troy and Asai, Akari and Zhong, Victor and Das, Rajarshi
+and Khashabi, Daniel and Hajishirzi, Hannaneh. When Not to Trust
+Language Models: Investigating Effectiveness of Parametric and Non-
+Parametric Memories. In The 61st Annual Meeting Of The Association
+For Computational Linguistics , 2023.
+[23] Nakano, Reiichiro and Hilton, Jacob and Balaji, Suchir and Wu, Jeff
+and Ouyang, Long and Kim, Christina and Hesse, Christopher and Jain,
+Shantanu and Kosaraju, Vineet and Saunders, William and others. We-
+bgpt: Browser-assisted question-answering with human feedback. arXiv
+preprint arXiv:2112.09332 , 2021.
+[24] Nguyen, Tri and Rosenberg, Mir and Song, Xia and Gao, Jianfeng and
+Tiwary, Saurabh and Majumder, Rangan and Deng, Li. Ms marco: A
+human-generated machine reading comprehension dataset. 2016.
+[25] Rajpurkar, Pranav and Zhang, Jian and Lopyrev, Konstantin and Liang,
+Percy. SQuAD: 100,000+ Questions for Machine Comprehension of
+Text. In Proceedings of the 2016 Conference on Empirical Methods in
+Natural Language Processing , pages 2383–2392, 2016.
+[26] Ram, Ori and Levine, Yoav and Dalmedigos, Itay and Muhlgay, Dor
+and Shashua, Amnon and Leyton-Brown, Kevin and Shoham, Yoav.
+In-context retrieval-augmented language models. Transactions of the
+Association for Computational Linguistics , 11:1316–1331, 2023.
+[27] M. Reid, N. Savinov, D. Teplyashin, D. Lepikhin, T. Lillicrap, J.-b.
+Alayrac, R. Soricut, A. Lazaridou, O. Firat, J. Schrittwieser, et al. Gem-
+ini 1.5: Unlocking multimodal understanding across millions of tokens
+of context. arXiv preprint arXiv:2403.05530 , 2024.
+[28] N. Reimers and I. Gurevych. Sentence-bert: Sentence embeddings us-
+ing siamese bert-networks. In Proceedings of the 2019 Conference on
+Empirical Methods in Natural Language Processing and the 9th Inter-
+national Joint Conference on Natural Language Processing (EMNLP-
+IJCNLP) , pages 3982–3992, 2019.
+[29] S. Robertson, H. Zaragoza, et al. The probabilistic relevance frame-
+work: Bm25 and beyond. Foundations and Trends® in Information
+Retrieval , 3(4):333–389, 2009.
+[30] T. Schick, J. Dwivedi-Yu, R. Dessì, R. Raileanu, M. Lomeli, E. Hambro,
+L. Zettlemoyer, N. Cancedda, and T. Scialom. Toolformer: Language
+models can teach themselves to use tools. Advances in Neural Informa-
+tion Processing Systems , 36, 2024.
+[31] Seonwoo, Yeon and Son, Juhee and Jin, Jiho and Lee, Sang-Woo and
+Kim, Ji-Hoon and Ha, Jung-Woo and Oh, Alice Haeyun. Two-Step
+Question Retrieval for Open-Domain QA. In 60th Annual Meeting of
+the Association for Computational Linguistics, ACL 2022 , pages 1487–
+1492. Association for Computational Linguistics, 2022.
+[32] Taori, Rohan and Gulrajani, Ishaan and Zhang, Tianyi and Dubois, Yann
+and Li, Xuechen and Guestrin, Carlos and Liang, Percy and Hashimoto,
+Tatsunori B. Stanford alpaca: an instruction-following llama model
+(2023). URL https://github. com/tatsu-lab/stanford_alpaca , 2023.
+[33] N. Thakur, N. Reimers, A. Rücklé, A. Srivastava, and I. Gurevych. Beir:
+A heterogeneous benchmark for zero-shot evaluation of information re-
+trieval models. In Thirty-fifth Conference on Neural Information Pro-
+cessing Systems Datasets and Benchmarks Track (Round 2) , 2021.
+[34] H. Touvron, T. Lavril, G. Izacard, X. Martinet, M.-A. Lachaux,
+T. Lacroix, B. Rozière, N. Goyal, E. Hambro, F. Azhar, et al. Llama:
+Open and efficient foundation language models. arXiv preprint
+arXiv:2302.13971 , 2023.
+[35] H. Touvron, L. Martin, K. Stone, P. Albert, A. Almahairi, Y . Babaei,
+N. Bashlykov, S. Batra, P. Bhargava, S. Bhosale, et al. Llama
+2: Open foundation and fine-tuned chat models. arXiv preprint
+arXiv:2307.09288 , 2023.
+[36] F. Zhu, W. Lei, C. Wang, J. Zheng, S. Poria, and T.-S. Chua. Retrieving
+and reading: A comprehensive survey on open-domain question answer-
+ing. arXiv preprint arXiv:2101.00774 , 2021.
